@@ -8,11 +8,11 @@ cross-checked against [`zebpay/zebpay-api-references`](https://github.com/zebpay
 
 - **Node.js 20+**, ESM, no build step
 - **One runtime dependency** (`socket.io-client`, and only for the private WebSocket)
-- **336 tests**, `node:test`, no test framework to install
+- **360 tests**, `node:test`, no test framework to install
 
 ```
 npm install
-npm test            # 336 tests
+npm test            # 360 tests
 npm run dashboard   # live BTC-INR dashboard
 npm run bot         # strategy engine, dry-run by default
 npm run check:live  # smoke-test the real API from a networked machine
@@ -54,6 +54,58 @@ Copy `.env.example` to `.env` and fill in your keys. Environment variables alway
 
 ---
 
+## Dashboard
+
+`npm run dashboard` serves a multi-page dashboard. Each function has its own page, reachable from
+the nav bar or by hash:
+
+| Page | URL | What it shows |
+| :-- | :-- | :-- |
+| **Overview** | `#/overview` | Data mode, price, bot state, order mode, AI verdict, safety summary |
+| **Live Market** | `#/market` | Price, 24h change, candlestick chart, order book, recent trades, connection state |
+| **Bot Status** | `#/bot` | Running/stopped, strategy, order mode, warm-up, fill count, errors, and *why* it is idle |
+| **AI Decisions** | `#/ai` | Model calls, vetoes, permissions, audit trail, kill switch |
+| **Setup** | `#/setup` | Where `.env` goes, every variable, key setup, subaccount, endpoints, commands |
+| **Fix Report** | `#/report` | Problems, root causes, exact fixes and expected results — copyable as plain text |
+
+### LIVE vs DEMO
+
+The banner and the mode badge always say which one you are looking at:
+
+- **LIVE** — real data from `https://futuresbe.zebpay.com`
+- **DEMO** — synthetic prices generated locally. Never presented as real, and never usable for
+  trading decisions.
+
+### Startup does not block on the network
+
+The HTTP port binds **first**. Candle history, bot warm-up, feed polling and clock-skew
+measurement all load afterwards, in the background, and report into the UI as they land. The only
+bounded wait is the initial LIVE-vs-DEMO probe, capped by `ZEBPAY_STARTUP_TIMEOUT_MS` (default 6s),
+so a hung upstream degrades to demo instead of leaving you staring at a blank tab.
+
+```
+  dashboard  http://localhost:4173      ← page is already reachable here
+  data mode  DEMO (synthetic)
+  orders     dry-run
+
+  ✓ candle history loaded (181 candles)
+  [bot] warm-up complete — 181 candles loaded
+  ✓ bot started (ema-cross(5,12), dry-run)
+```
+
+### Secrets
+
+No secret reaches the browser, the Fix Report, or the logs. The Setup page shows a *masked
+fingerprint* so you can confirm which key is loaded:
+
+- `ZEBPAY_API_KEY` → `ak_l…6666` — a key is an identifier, so its tail is harmless
+- `ZEBPAY_API_SECRET` → `sk_l… (40 chars, hidden)` — the credential gets a prefix only
+
+`.env` is gitignored; `.env.example` is committed. There is no browser field for credentials and no
+HTTP route that can place an order.
+
+---
+
 ## What is in here
 
 | Path | Purpose |
@@ -68,7 +120,9 @@ Copy `.env.example` to `.env` and fill in your keys. Environment variables alway
 | `src/strategy/engine.js` | Polling strategy loop |
 | `src/strategy/indicators.js` | SMA, EMA, RSI, ATR, Donchian |
 | `src/strategy/strategies/emaCross.js` | Reference strategy |
-| `src/server/` | Dashboard: HTTP + SSE, canvas UI |
+| `src/server/` | Dashboard: HTTP + SSE, canvas UI, pages |
+| `src/server/setup.js` | Setup-page introspection; secrets masked server-side |
+| `src/server/report.js` | Fix Report generation from live runtime state |
 | `bin/zepay.js` | CLI |
 | **AI stack** | |
 | `src/ai/features.js` | Candle/book factors, regime classification |

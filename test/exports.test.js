@@ -34,6 +34,8 @@ test('the package exports the core SDK', () => {
     'createEmaCrossStrategy',
     'sma', 'ema', 'rsi', 'atr', 'rollingExtremes', 'closes',
     'MarketFeed', 'DemoMarketFeed', 'createDashboardServer', 'buildFeed',
+    'describeSetup', 'maskSecret', 'maskSecretValue', 'ENV_VARS',
+    'buildFixReport', 'formatFixReport',
   ]) {
     assert.ok(name in pkg, `missing export: ${name}`);
   }

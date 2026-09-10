@@ -4,6 +4,8 @@ import { extname, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DemoMarketFeed, MarketFeed } from './marketFeed.js';
 import { normalizeSymbol } from '../core/symbols.js';
+import { describeSetup } from './setup.js';
+import { buildFixReport, formatFixReport } from './report.js';
 
 const PUBLIC_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)), 'public');
 
@@ -31,15 +33,27 @@ const MIME = {
  * @param {string} [opts.symbol]
  * @param {'live'|'demo'} [opts.mode]
  * @param {object} [opts.ai] autonomous bundle from `buildAutonomous()`
+ * @param {object} [opts.config] resolved config, for the Setup and Report pages
+ * @param {object} [opts.runtime] mutable bag; `clockSkewMs` is filled in after startup
  */
-export function createDashboardServer({ feed, engine, symbol = 'BTCINR', mode = 'live', ai = null }) {
+export function createDashboardServer({
+  feed,
+  engine,
+  symbol = 'BTCINR',
+  mode = 'live',
+  ai = null,
+  config = {},
+  runtime = {},
+}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
     try {
       if (req.method === 'GET' && path === '/api/stream') return sse(req, res, feed);
-      if (path.startsWith('/api/')) return api(req, res, url, { feed, engine, symbol, mode, ai });
+      if (path.startsWith('/api/')) {
+        return api(req, res, url, { feed, engine, symbol, mode, ai, config, runtime });
+      }
       return serveStatic(req, res, path);
     } catch (err) {
       sendJson(res, 500, { error: err.message });
@@ -53,12 +67,14 @@ export function createDashboardServer({ feed, engine, symbol = 'BTCINR', mode = 
   return server;
 }
 
-async function api(req, res, url, { feed, engine, symbol, mode, ai }) {
+async function api(req, res, url, ctx) {
   const path = url.pathname;
+  const { feed, engine, symbol, mode, ai, config, runtime } = ctx;
+  const clockSkewMs = runtime?.clockSkewMs ?? null;
 
   // ── Autonomous AI routes. Kept ahead of the GET switch because several are
   //    POST and all of them are operator controls, not read-only views.
-  if (path.startsWith('/api/ai')) return aiApi(req, res, url, { ai, mode });
+  if (path.startsWith('/api/ai')) return aiApi(req, res, url, { ai, mode, feed, engine, config, clockSkewMs });
 
   if (req.method !== 'GET') return sendJson(res, 405, { error: `${req.method} not allowed on ${path}` });
 
@@ -71,7 +87,41 @@ async function api(req, res, url, { feed, engine, symbol, mode, ai }) {
         upstream: mode === 'demo' ? 'synthetic' : 'https://futuresbe.zebpay.com',
         botRunning: Boolean(engine?.running),
         orderMode: engine?.gateway?.mode ?? 'dry-run',
+        // Stated explicitly on every page: whether real money can move.
+        realOrdersAllowed: engine?.gateway?.mode === 'live',
+        feedError: feed.lastError ?? null,
+        feedFailures: feed.failures ?? 0,
+        aiEnabled: Boolean(ai),
       });
+
+    case '/api/setup':
+      return sendJson(res, 200, describeSetup({ config, feedMode: mode }));
+
+    case '/api/report': {
+      const entries = buildFixReport({
+        config,
+        feedMode: mode,
+        feedError: feed.lastError ?? null,
+        feedFailures: feed.failures ?? 0,
+        clockSkewMs,
+        bot: engine
+          ? { ...engine.status(), fills: engine.gateway?.fills?.length ?? 0, idleReason: engine.idleReason?.() }
+          : null,
+        ai: ai
+          ? {
+              enabled: true,
+              killSwitchBlocked: ai.killSwitch.blocked,
+              killSwitchReason: ai.killSwitch.reason,
+              verdict: null,
+            }
+          : null,
+      });
+      const text = formatFixReport(entries, {
+        feedMode: mode,
+        orderMode: engine?.gateway?.mode ?? 'dry-run',
+      });
+      return sendJson(res, 200, { entries, text });
+    }
 
     case '/api/snapshot':
       return sendJson(res, 200, feed.snapshot(Number(url.searchParams.get('levels') ?? 20)));
@@ -87,12 +137,25 @@ async function api(req, res, url, { feed, engine, symbol, mode, ai }) {
       }
     }
 
-    case '/api/bot':
+    case '/api/bot': {
+      const st = engine?.status() ?? null;
+      const fills = engine?.gateway?.fills ?? [];
       return sendJson(res, 200, {
+        enabled: Boolean(engine),
         running: Boolean(engine?.running),
-        status: engine?.status() ?? null,
-        fills: engine?.gateway?.fills?.slice(-50) ?? [],
+        status: st,
+        strategy: st?.strategy ?? null,
+        mode: st?.mode ?? 'dry-run',
+        warmup: st?.warmup ?? null,
+        fillCount: fills.length,
+        errors: st?.errors ?? 0,
+        lastError: st?.lastError ?? null,
+        // A plain-language reason beats "idle", which has several distinct
+        // causes that each need a different response.
+        idleReason: engine?.idleReason?.() ?? null,
+        fills: fills.slice(-50).reverse(),
       });
+    }
 
     case '/api/health':
       return sendJson(res, 200, {
@@ -114,8 +177,20 @@ async function api(req, res, url, { feed, engine, symbol, mode, ai }) {
  * order directly. The only path to an order runs through the pipeline's gate
  * sequence.
  */
-async function aiApi(req, res, url, { ai, mode }) {
+async function aiApi(req, res, url, ctx) {
   const path = url.pathname;
+  const { ai, mode, feed, engine, config, clockSkewMs } = ctx;
+
+  // Unknown AI sub-routes are 404 whether or not the stack is running. Answering
+  // them with 503 would imply the route exists but is unavailable, which is
+  // misleading — and for something like /api/ai/order it matters that the
+  // answer is unambiguously "no such thing".
+  const KNOWN = new Set([
+    '/api/ai/status', '/api/ai/scan', '/api/ai/trace', '/api/ai/cycle',
+    '/api/ai/permissions', '/api/ai/killswitch', '/api/ai/audit', '/api/ai/health',
+  ]);
+  if (!KNOWN.has(path)) return sendJson(res, 404, { error: `unknown route ${path}` });
+
   if (!ai) return sendJson(res, 503, { error: 'autonomous trading is not enabled (start with --ai)' });
 
   switch (path) {
@@ -342,14 +417,31 @@ function sendJson(res, status, payload) {
  * @param {string} opts.symbol
  * @param {boolean} [opts.forceDemo]
  * @param {number} [opts.intervalMs]
+ * @param {number} [opts.probeTimeoutMs] hard cap on the initial LIVE probe
  * @returns {Promise<{feed: MarketFeed|DemoMarketFeed, mode: 'live'|'demo', reason?: string}>}
  */
-export async function buildFeed({ client, symbol, forceDemo = false, intervalMs = 2_000 }) {
+export async function buildFeed({
+  client,
+  symbol,
+  forceDemo = false,
+  intervalMs = 2_000,
+  probeTimeoutMs = 6_000,
+}) {
   if (!forceDemo) {
     const live = new MarketFeed({ client, symbol, intervalMs });
-    const ok = await live.refresh();
+    // Bound the probe. Without this a hung TLS handshake keeps the caller
+    // waiting for the transport's own timeout multiplied by its retry count,
+    // which is long enough that the dashboard looks frozen on startup.
+    //
+    // The timer is deliberately NOT unref'd: it is short and bounded, and an
+    // unref'd timer would let a caller with nothing else on the event loop exit
+    // before the probe resolves.
+    const ok = await Promise.race([
+      live.refresh(),
+      new Promise((resolve) => { setTimeout(() => resolve(false), probeTimeoutMs); }),
+    ]);
     if (ok) return { feed: live, mode: 'live' };
-    const reason = live.lastError;
+    const reason = live.lastError ?? `upstream did not respond within ${probeTimeoutMs}ms`;
     live.stop();
     const demo = new DemoMarketFeed({ symbol, intervalMs: 1_000 });
     return { feed: demo, mode: 'demo', reason };

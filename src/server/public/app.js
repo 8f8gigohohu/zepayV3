@@ -8,6 +8,10 @@ const state = {
   candles: [],
   snapshot: null,
   demo: false,
+  /** 'live' | 'demo' | 'pending' */
+  mode: 'pending',
+  config: null,
+  page: 'overview',
 };
 
 /* ── Formatting ──────────────────────────────────────────────────────────── */
@@ -197,7 +201,34 @@ function renderSnapshot(snap) {
 
   renderBook(snap);
   renderTrades(snap.trades ?? []);
-  drawChart();
+  renderConnection(snap);
+  // A canvas inside a hidden page has no client width, so drawing it is both
+  // wasted work and produces a 0-width image that would have to be redrawn
+  // anyway. The router calls drawChart() when the page becomes visible.
+  if (state.page === 'market') drawChart();
+}
+
+function renderConnection(snap) {
+  const el = $('connStats');
+  if (!el) return;
+  el.innerHTML = [
+    ['Data mode', state.mode === 'live' ? 'LIVE (real ZebPay data)' : 'DEMO (synthetic data)'],
+    ['Upstream', state.mode === 'live' ? 'https://futuresbe.zebpay.com' : 'none — generated locally'],
+    ['Streaming', state.stream === 'open' ? 'connected (SSE)' : state.stream ?? 'connecting'],
+    ['Last update', snap.updatedAt ? fmtTime(snap.updatedAt) : '—'],
+    ['Polls', String(snap.polls ?? 0)],
+    ['Failures', String(snap.failures ?? 0)],
+    ['Last error', snap.lastError ?? 'none'],
+  ]
+    .map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
+    .join('');
+}
+
+/** Escape before interpolating into innerHTML — upstream strings are not ours. */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
 }
 
 function renderBook(snap) {
@@ -262,43 +293,365 @@ async function loadConfig() {
   try {
     const res = await fetch('/api/config');
     const cfg = await res.json();
+    state.config = cfg;
     state.demo = cfg.demo;
+    state.mode = cfg.mode;
+
     const badge = $('modeBadge');
-    badge.textContent = cfg.demo ? 'demo data' : 'live';
+    // LIVE / DEMO is the single most important fact on the page, so it is
+    // stated in full words rather than left to colour alone.
+    badge.textContent = cfg.demo ? 'DEMO — synthetic data' : 'LIVE — real ZebPay data';
     badge.className = `badge ${cfg.demo ? 'demo' : 'live'}`;
 
     const bot = $('botBadge');
-    bot.textContent = cfg.botRunning ? `bot · ${cfg.orderMode}` : 'bot idle';
+    bot.textContent = cfg.botRunning ? `bot · ${cfg.orderMode}` : 'bot not running';
     bot.className = `badge ${cfg.botRunning ? 'live' : 'dim'}`;
 
+    // Stack the warnings: demo data, upstream failures and live trading are
+    // independent conditions and any of them can be true at once.
+    const warnings = [];
     if (cfg.demo) {
-      const b = $('banner');
-      b.textContent =
-        'Showing synthetic demo data — the ZebPay upstream is not reachable from this host. ' +
-        'Run the dashboard from a machine that can reach futuresbe.zebpay.com for live prices.';
-      b.classList.remove('hidden');
+      warnings.push(
+        'DEMO MODE — these prices are synthetic and generated locally. They are not real ' +
+        'ZebPay prices and must not be used for trading decisions. See the Fix Report page.',
+      );
     }
-  } catch {
-    /* config is best-effort */
+    if (cfg.feedError) {
+      warnings.push(`Upstream error: ${cfg.feedError}`);
+    }
+    if ((cfg.feedFailures ?? 0) > 0) {
+      warnings.push(`${cfg.feedFailures} upstream request(s) have failed.`);
+    }
+    if (cfg.realOrdersAllowed) {
+      warnings.push(
+        'REAL ORDERS ARE ENABLED. Live trading is on and fills will be transmitted to ZebPay.',
+      );
+    }
+
+    const b = $('banner');
+    if (warnings.length) {
+      b.textContent = '';
+      for (const w of warnings) {
+        const p = document.createElement('div');
+        p.className = cfg.realOrdersAllowed && w.startsWith('REAL') ? 'banner-danger' : '';
+        p.textContent = w;
+        b.appendChild(p);
+      }
+      b.className = `banner ${cfg.realOrdersAllowed ? 'danger' : ''}`;
+    } else {
+      b.className = 'banner hidden';
+    }
+
+    if (state.page === 'overview') renderOverview();
+  } catch (err) {
+    const b = $('banner');
+    b.textContent = `Could not read dashboard config: ${err.message}`;
+    b.className = 'banner';
   }
 }
 
 function connectStream() {
   const es = new EventSource('/api/stream');
+  state.stream = 'connecting';
+
+  es.onopen = () => {
+    state.stream = 'open';
+    $('linkBadge').textContent = 'streaming';
+    $('linkBadge').className = 'badge live';
+    if (state.page === 'market') renderConnection(state.snapshot ?? {});
+  };
 
   es.addEventListener('snapshot', (e) => {
     const snap = JSON.parse(e.data);
     renderSnapshot(snap);
-    $('linkBadge').textContent = 'streaming';
-    $('linkBadge').className = 'badge live';
     $('footStatus').textContent =
       `last update ${fmtTime(snap.updatedAt)} · poll #${snap.polls} · symbol ${snap.symbol}`;
   });
 
   es.onerror = () => {
+    state.stream = 'reconnecting';
     $('linkBadge').textContent = 'reconnecting';
     $('linkBadge').className = 'badge dim';
+    if (state.page === 'market') renderConnection(state.snapshot ?? {});
   };
+}
+
+/* ── Router ──────────────────────────────────────────────────────────────── */
+
+const ROUTES = ['overview', 'market', 'bot', 'ai', 'setup', 'report'];
+
+/** Per-page loaders, run on entry and on the page's own refresh interval. */
+const PAGE_LOADERS = {
+  overview: renderOverview,
+  market: () => { loadCandles(); },
+  bot: loadBot,
+  ai: refreshAi,
+  setup: loadSetup,
+  report: loadReport,
+};
+
+function currentRoute() {
+  const hash = (location.hash || '').replace(/^#\/?/, '');
+  return ROUTES.includes(hash) ? hash : 'overview';
+}
+
+function navigate() {
+  const route = currentRoute();
+  state.page = route;
+
+  for (const r of ROUTES) {
+    $(`page-${r}`)?.classList.toggle('hidden', r !== route);
+  }
+  for (const a of $('nav').querySelectorAll('a[data-route]')) {
+    a.classList.toggle('active', a.dataset.route === route);
+  }
+
+  // The chart canvas has no width while its page is hidden, so draw it now
+  // that it is visible.
+  if (route === 'market') drawChart();
+  PAGE_LOADERS[route]?.();
+}
+
+/* ── Overview page ───────────────────────────────────────────────────────── */
+
+function tile(label, value, tone = '', note = '') {
+  return `<div class="tile ${tone}">
+    <div class="tile-label">${escapeHtml(label)}</div>
+    <div class="tile-value">${escapeHtml(value)}</div>
+    ${note ? `<div class="tile-note">${escapeHtml(note)}</div>` : ''}
+  </div>`;
+}
+
+async function renderOverview() {
+  const cfg = state.config;
+  const [bot, ai] = await Promise.all([
+    fetch('/api/bot').then((r) => r.json()).catch(() => null),
+    state.config?.aiEnabled
+      ? fetch('/api/ai/health').then((r) => r.json()).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  const price = state.snapshot?.lastPrice;
+  const pct = Number(state.snapshot?.ticker?.percentage ?? 0);
+
+  $('ovTiles').innerHTML = [
+    tile('Data mode', cfg?.demo ? 'DEMO' : cfg ? 'LIVE' : 'loading',
+      cfg?.demo ? 'warn' : 'ok',
+      cfg?.demo ? 'synthetic — not real prices' : 'real ZebPay data'),
+    tile('BTC-INR price', price ? fmtPrice(price) : '—', '',
+      `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% / 24h`),
+    tile('Bot', bot?.enabled ? (bot.running ? 'RUNNING' : 'STOPPED') : 'NOT ENABLED',
+      bot?.running ? 'ok' : '',
+      bot?.strategy ?? (bot?.enabled ? 'no strategy' : 'start with --bot')),
+    tile('Order mode', bot?.mode ?? cfg?.orderMode ?? 'dry-run',
+      cfg?.realOrdersAllowed ? 'danger' : 'ok',
+      cfg?.realOrdersAllowed ? 'real orders possible' : 'simulated fills only'),
+    tile('AI verdict', ai?.verdict ?? (cfg?.aiEnabled ? 'loading' : 'NOT ENABLED'),
+      ai && !ai.ok ? 'warn' : '',
+      cfg?.aiEnabled ? 'start with --ai' : ''),
+  ].join('');
+
+  $('ovSafety').innerHTML = [
+    ['Real orders allowed', cfg?.realOrdersAllowed ? 'YES — live trading is on' : 'No — dry-run only'],
+    ['Requires ZEBPAY_ALLOW_LIVE=true', 'and the --live flag, and live data'],
+    ['Order endpoint in the browser', 'None. No page here can place an order.'],
+    ['Kill switch', ai ? (ai.checks?.find((c) => c.name === 'kill switch')?.detail ?? 'unknown') : 'not running'],
+    ['Secrets shown in this UI', 'Never. Keys are masked; secrets are not transmitted.'],
+  ]
+    .map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
+    .join('');
+
+  const links = [
+    ['market', 'Live Market', 'price, chart, order book, recent trades'],
+    ['bot', 'Bot Status', 'whether it is running, and why not if it is not'],
+    ['ai', 'AI Decisions', 'model calls, vetoes and the audit trail'],
+    ['setup', 'Setup', '.env, credentials, endpoints, commands'],
+    ['report', 'Fix Report', 'problems, root causes and fixes, copyable'],
+  ];
+  $('ovLinks').innerHTML = links
+    .map(([r, t, d]) => `<a class="link-card" href="#/${r}"><strong>${t}</strong><span>${d}</span></a>`)
+    .join('');
+
+  $('ovUpdated').textContent = `updated ${new Date().toLocaleTimeString('en-IN', { hour12: false })}`;
+}
+
+/* ── Bot page ────────────────────────────────────────────────────────────── */
+
+async function loadBot() {
+  const b = await fetch('/api/bot').then((r) => r.json()).catch(() => null);
+  if (!b) {
+    $('botHeadline').textContent = 'Could not read bot status.';
+    return;
+  }
+
+  const badge = $('botStateBadge');
+  const stateLabel = !b.enabled ? 'NOT ENABLED' : b.running ? 'RUNNING' : 'STOPPED';
+  badge.textContent = stateLabel;
+  badge.className = `badge ${b.running ? 'live' : 'dim'}`;
+
+  $('botHeadline').textContent = b.idleReason
+    ? `Not trading: ${b.idleReason}`
+    : `Trading ${b.status?.symbol ?? ''} on ${b.status?.timeframe ?? '—'} in ${b.mode} mode.`;
+
+  $('botStats').innerHTML = [
+    ['Running', b.running ? 'yes' : 'no'],
+    ['Strategy', b.strategy ?? '—'],
+    ['Symbol', b.status?.symbol ?? '—'],
+    ['Timeframe', b.status?.timeframe ?? '—'],
+    ['Order mode', `${b.mode}${b.mode === 'live' ? ' (REAL ORDERS)' : ' (simulated)'}`],
+    ['Warm-up', b.warmup ? `${b.warmup.done ? 'done' : 'in progress'} — ${b.warmup.candles} candles` : '—'],
+    ['Ticks', String(b.status?.ticks ?? 0)],
+    ['Fills', String(b.fillCount ?? 0)],
+    ['Errors', String(b.errors ?? 0)],
+    ['Started', b.status?.startedAt ? new Date(b.status.startedAt).toLocaleTimeString('en-IN', { hour12: false }) : '—'],
+  ]
+    .map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
+    .join('');
+
+  $('fillCount').textContent = `${b.fillCount ?? 0} total`;
+  const tbody = $('fillTable').querySelector('tbody');
+  tbody.textContent = '';
+  const fills = b.fills ?? [];
+  if (!fills.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.textContent = b.enabled ? 'no fills yet' : 'the bot is not enabled (start with --bot)';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+  for (const f of fills.slice(0, 50)) {
+    const tr = document.createElement('tr');
+    for (const v of [
+      f.at ? fmtTime(f.at) : '—', f.mode ?? '—', f.side ?? '—', f.symbol ?? '—',
+      fmtNum(f.amount, 6), fmtPrice(f.price), fmtNum(f.fee, 2),
+    ]) {
+      const td = document.createElement('td');
+      td.textContent = v;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+
+  const errEl = $('botErrors');
+  if (!b.errors) {
+    errEl.textContent = 'No errors recorded.';
+    errEl.className = 'errors ok';
+  } else {
+    errEl.textContent = `${b.errors} error(s). Most recent: ${b.lastError ?? 'no detail captured'}`;
+    errEl.className = 'errors bad';
+  }
+}
+
+/* ── Setup page ──────────────────────────────────────────────────────────── */
+
+async function loadSetup() {
+  const s = await fetch('/api/setup').then((r) => r.json()).catch(() => null);
+  if (!s) return;
+
+  const tbody = $('envTable').querySelector('tbody');
+  tbody.textContent = '';
+  for (const v of s.variables) {
+    const tr = document.createElement('tr');
+    // Secrets are shown as a masked fingerprint only. The raw value never
+    // reaches this response at all — see describeSetup() on the server.
+    const shown = v.set ? (v.masked ?? v.value ?? '') : '';
+    const cells = [
+      v.key + (v.required ? ' *' : ''),
+      v.set ? 'yes' : v.required ? 'MISSING' : 'not set',
+      shown,
+      v.purpose,
+    ];
+    cells.forEach((text, i) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (i === 1 && v.required && !v.set) td.className = 'bad';
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+
+  $('credStats').innerHTML = [
+    ['Credentials loaded', s.credentials.present ? 'yes' : 'no'],
+    ['Key fingerprint', s.credentials.keyFingerprint ?? '—'],
+    ['Secret', 'never displayed, never transmitted'],
+    ['Subaccount', s.credentials.subaccountId ?? 'main account'],
+    ['Missing required', s.missingRequired.length ? s.missingRequired.join(', ') : 'none'],
+  ]
+    .map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
+    .join('');
+
+  $('endpointStats').innerHTML = [
+    ['REST base URL', s.endpoints.rest],
+    ['WebSocket URL', s.endpoints.ws],
+    ['Real orders possible', s.trading.realOrdersPossible ? 'YES' : 'no'],
+    ['Rule', s.trading.note],
+  ]
+    .map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
+    .join('');
+
+  $('cmdList').innerHTML = s.commands
+    .map((c) => `<div class="cmd-row"><span>${escapeHtml(c.label)}</span><pre class="cmd">${escapeHtml(c.command)}</pre></div>`)
+    .join('');
+}
+
+/* ── Fix Report page ─────────────────────────────────────────────────────── */
+
+let reportText = '';
+
+async function loadReport() {
+  const r = await fetch('/api/report').then((x) => x.json()).catch(() => null);
+  if (!r) return;
+  reportText = r.text;
+
+  const issues = r.entries.filter((e) => e.status === 'issue').length;
+  $('reportMeta').textContent = `${r.entries.length - issues} ok · ${issues} issue(s)`;
+
+  const list = $('reportList');
+  list.textContent = '';
+  for (const e of r.entries) {
+    const box = document.createElement('div');
+    box.className = `report-entry ${e.status}`;
+
+    const head = document.createElement('div');
+    head.className = 'report-head';
+    head.textContent = `${e.status === 'ok' ? '✓' : '✗'} ${e.id} — ${e.severity}`;
+    box.appendChild(head);
+
+    for (const [label, value] of [
+      ['Problem', e.problem],
+      ['Root cause', e.rootCause],
+      ['Fix', e.fix],
+      ['Expected result', e.expected],
+    ]) {
+      const row = document.createElement('div');
+      row.className = 'report-row';
+      const k = document.createElement('strong');
+      k.textContent = label;
+      const v = document.createElement('div');
+      v.className = 'report-value';
+      v.textContent = value;
+      row.append(k, v);
+      box.appendChild(row);
+    }
+    list.appendChild(box);
+  }
+}
+
+async function copyReport() {
+  const btn = $('reportCopy');
+  const pre = $('reportText');
+  pre.textContent = reportText;
+  pre.classList.remove('hidden');
+  try {
+    await navigator.clipboard.writeText(reportText);
+    btn.textContent = 'Copied ✓';
+  } catch {
+    // Clipboard API needs a secure context; the text is already on screen so
+    // the user can still select it manually.
+    btn.textContent = 'Select the text below';
+  }
+  setTimeout(() => { btn.textContent = 'Copy as text'; }, 2500);
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
@@ -312,13 +665,27 @@ $('tfGroup').addEventListener('click', (e) => {
   loadCandles();
 });
 
-window.addEventListener('resize', drawChart);
+$('reportCopy').addEventListener('click', copyReport);
+$('reportRefresh').addEventListener('click', loadReport);
 
-loadConfig();
-loadCandles();
-connectStream();
-// Refresh candles periodically so newly closed bars appear without a reload.
-setInterval(loadCandles, 30_000);
+window.addEventListener('resize', () => {
+  if (state.page === 'market') drawChart();
+});
+window.addEventListener('hashchange', navigate);
+
+(async function boot() {
+  await loadConfig();
+  navigate();
+  connectStream();
+  initAi();
+  // Refresh candles periodically so newly closed bars appear without a reload.
+  setInterval(loadCandles, 30_000);
+  // Keep the page you are looking at current.
+  setInterval(() => {
+    if (state.page === 'overview') renderOverview();
+    if (state.page === 'bot') loadBot();
+  }, 5_000);
+})();
 
 /* ── AI autonomous panel ─────────────────────────────────────────────────── */
 /*
@@ -472,11 +839,12 @@ async function refreshAi() {
 async function initAi() {
   try {
     const r = await fetch('/api/ai/status');
-    if (!r.ok) return; // not started with --ai: leave the panel hidden
+    if (!r.ok) return; // not started with --ai: leave the "not enabled" panel
   } catch {
     return;
   }
   ai.enabled = true;
+  $('aiUnavailable').classList.add('hidden');
   $('aiCard').classList.remove('hidden');
 
   $('aiScanNow').addEventListener('click', async () => {
@@ -511,5 +879,3 @@ async function initAi() {
   await refreshAi();
   ai.timer = setInterval(refreshAi, 10_000);
 }
-
-initAi();

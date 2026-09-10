@@ -61,6 +61,16 @@ export class StrategyEngine extends EventEmitter {
     this.lastSignal = null;
     this.startedAt = null;
 
+    // Warm-up state, surfaced on the dashboard's Bot page. A bot that has not
+    // finished warming up is idle for a legitimate reason, and saying "running"
+    // while it has no history would be misleading.
+    this.warmupDone = false;
+    this.warmupError = null;
+    /** Human-readable error from the most recent failure, for the UI. */
+    this.lastError = null;
+    /** Name of the strategy, taken from the factory if it sets one. */
+    this.strategyName = strategy.name ?? null;
+
     // Engine errors are expected operational events (network, strategy bug), not
     // programmer errors. Without a default listener Node rethrows the 'error'
     // event out of the polling loop and kills the process, so install a no-op
@@ -183,11 +193,19 @@ export class StrategyEngine extends EventEmitter {
       // Prime the candle buffer so the strategy has enough history on cycle one.
       try {
         this.candles = await this.#fetchCandles();
+        this.warmupDone = true;
+        this.warmupError = null;
         this.emit('warmup', { candles: this.candles.length });
       } catch (err) {
         this.errors += 1;
+        this.warmupError = err.message;
+        this.lastError = err.message;
         this.emit('error', err);
       }
+    } else {
+      // No warm-up requested: the buffer fills from the first tick, so mark it
+      // done rather than leaving the UI waiting on a state that never arrives.
+      this.warmupDone = true;
     }
 
     void this.#loop();
@@ -199,6 +217,7 @@ export class StrategyEngine extends EventEmitter {
         await this.tick();
       } catch (err) {
         this.errors += 1;
+        this.lastError = err.message;
         this.emit('error', err);
       }
       if (!this.running) break;
@@ -226,7 +245,35 @@ export class StrategyEngine extends EventEmitter {
       lastSignal: this.lastSignal,
       position: this.gateway.summary(this.symbol),
       startedAt: this.startedAt,
+      strategy: this.strategyName,
+      warmup: {
+        done: this.warmupDone,
+        candles: this.candles.length,
+        error: this.warmupError,
+      },
+      lastError: this.lastError,
     };
+  }
+
+  /**
+   * One-line explanation of why the bot is not trading.
+   *
+   * "Idle" on its own is not actionable — there are several distinct causes and
+   * each needs a different response from the operator.
+   */
+  idleReason() {
+    if (!this.running) return 'the bot was not started (pass --bot to run the strategy engine)';
+    if (!this.warmupDone) {
+      return this.warmupError
+        ? `warming up failed: ${this.warmupError}`
+        : 'still loading candle history';
+    }
+    if (this.candles.length === 0) return 'no candle history available yet';
+    if (!this.lastSignal) return 'waiting for the first completed candle';
+    if (this.lastSignal.action === 'HOLD') {
+      return `holding — ${this.lastSignal.reason ?? 'no crossover yet'}`;
+    }
+    return null;
   }
 }
 

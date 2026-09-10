@@ -53,6 +53,8 @@ export { createEmaCrossStrategy } from './strategy/strategies/emaCross.js';
 export { sma, ema, rsi, atr, rollingExtremes, closes } from './strategy/indicators.js';
 export { MarketFeed, DemoMarketFeed } from './server/marketFeed.js';
 export { createDashboardServer, buildFeed } from './server/app.js';
+export { describeSetup, maskSecret, maskSecretValue, ENV_VARS } from './server/setup.js';
+export { buildFixReport, formatFixReport } from './server/report.js';
 
 /* ── AI autonomous stack ───────────────────────────────────────────────────── */
 

@@ -235,3 +235,160 @@ footer {
   font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .audit-row { color: var(--dim); white-space: nowrap; }
+
+/* ── Multi-page layout ───────────────────────────────────────────────────── */
+/* `main` used to be the grid; now each `.page` is, so pages can be swapped
+   without the card positions depending on which siblings are visible. */
+
+main { display: block; }
+
+.page {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.page.hidden { display: none; }
+.full { grid-column: 1 / -1; }
+
+@media (max-width: 1000px) {
+  .page { grid-template-columns: minmax(0, 1fr); }
+  .chart-card { grid-column: auto; grid-row: auto; }
+}
+
+/* ── Navigation ──────────────────────────────────────────────────────────── */
+
+.nav {
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.nav a {
+  padding: 10px 14px;
+  color: var(--dim);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+.nav a:hover { color: var(--text); }
+.nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Banner ──────────────────────────────────────────────────────────────── */
+
+.banner div + div { margin-top: 4px; }
+.banner-danger { color: #ffb4b2; font-weight: 600; }
+
+/* ── Overview tiles ──────────────────────────────────────────────────────── */
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+
+.tile {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.tile.ok { border-left-color: var(--green); }
+.tile.warn { border-left-color: var(--accent); }
+.tile.danger { border-left-color: var(--red); }
+.tile-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+.tile-value { font-size: 18px; font-weight: 600; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.tile-note { font-size: 11px; color: var(--dim); }
+
+.links { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--text);
+}
+.link-card:hover { border-color: var(--accent); }
+.link-card strong { font-size: 13px; }
+.link-card span { font-size: 11px; color: var(--dim); }
+
+/* ── Generic tables ──────────────────────────────────────────────────────── */
+
+.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.grid th {
+  text-align: left; font-weight: 600; color: var(--dim);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.grid td {
+  padding: 6px 8px; border-bottom: 1px solid #1b2030;
+  font-variant-numeric: tabular-nums; vertical-align: top;
+}
+.grid td.bad { color: var(--red); font-weight: 600; }
+
+/* ── Bot page ────────────────────────────────────────────────────────────── */
+
+.headline { font-size: 14px; margin: 4px 0 12px; }
+.errors { font-size: 13px; padding: 8px 10px; border-radius: 6px; background: var(--panel-2); }
+.errors.ok { color: var(--green); }
+.errors.bad { color: #ffb4b2; background: #2a1517; }
+
+/* ── Setup page ──────────────────────────────────────────────────────────── */
+
+.sub-head { margin: 22px 0 8px; font-size: 13px; color: var(--text); }
+.sub-head:first-of-type { margin-top: 4px; }
+
+.cmd {
+  background: #0e121b;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #cfd6e4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+.cmd-row { display: flex; align-items: center; gap: 12px; margin: 6px 0; flex-wrap: wrap; }
+.cmd-row span { font-size: 12px; color: var(--dim); min-width: 190px; }
+.cmd-row .cmd { margin: 0; flex: 1; min-width: 260px; }
+
+.warn-note {
+  background: #2a2115;
+  border: 1px solid #5a4526;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.steps { font-size: 13px; line-height: 1.8; padding-left: 20px; }
+.empty { font-size: 13px; color: var(--dim); }
+
+/* ── Fix Report page ─────────────────────────────────────────────────────── */
+
+.report-entry {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 10px 0;
+  background: var(--panel-2);
+}
+.report-entry.issue { border-left-color: var(--red); }
+.report-head {
+  font: 600 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 8px;
+}
+.report-entry.issue .report-head { color: #ffb4b2; }
+.report-entry.ok .report-head { color: var(--green); }
+.report-row { display: grid; grid-template-columns: 120px 1fr; gap: 10px; margin: 6px 0; font-size: 13px; }
+.report-row strong { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+.report-value { white-space: pre-wrap; word-break: break-word; }

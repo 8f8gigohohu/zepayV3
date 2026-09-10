@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ZebPay Futures — BTC-INR</title>
+  <title>ZebPay Futures Dashboard</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>₿</text></svg>" />
 </head>
@@ -29,85 +29,239 @@
     </div>
   </header>
 
+  <nav id="nav" class="nav">
+    <a href="#/overview" data-route="overview">Overview</a>
+    <a href="#/market" data-route="market">Live Market</a>
+    <a href="#/bot" data-route="bot">Bot Status</a>
+    <a href="#/ai" data-route="ai">AI Decisions</a>
+    <a href="#/setup" data-route="setup">Setup</a>
+    <a href="#/report" data-route="report">Fix Report</a>
+  </nav>
+
   <div id="banner" class="banner hidden"></div>
 
   <main>
-    <section class="card chart-card">
-      <div class="card-head">
-        <h2>Price</h2>
-        <div class="tf-group" id="tfGroup">
-          <button data-tf="1m" class="active">1m</button>
-          <button data-tf="5m">5m</button>
-          <button data-tf="15m">15m</button>
-          <button data-tf="1h">1h</button>
-          <button data-tf="4h">4h</button>
-          <button data-tf="1d">1d</button>
+    <!-- ══ OVERVIEW ══════════════════════════════════════════════════════ -->
+    <section class="page" id="page-overview">
+      <div class="card full">
+        <div class="card-head">
+          <h2>Overview</h2>
+          <span class="hint" id="ovUpdated">—</span>
         </div>
+        <div class="tiles" id="ovTiles"></div>
       </div>
-      <canvas id="chart" height="360"></canvas>
-      <div class="chart-foot">
-        <span id="chartMeta">—</span>
+
+      <div class="card full">
+        <div class="card-head"><h2>Safety</h2></div>
+        <dl class="stats" id="ovSafety"></dl>
+      </div>
+
+      <div class="card full">
+        <div class="card-head"><h2>Where to go next</h2></div>
+        <div class="links" id="ovLinks"></div>
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>24h</h2></div>
-      <dl class="stats" id="stats"></dl>
+    <!-- ══ LIVE MARKET ═══════════════════════════════════════════════════ -->
+    <section class="page hidden" id="page-market">
+      <section class="card chart-card">
+        <div class="card-head">
+          <h2>Price</h2>
+          <div class="tf-group" id="tfGroup">
+            <button data-tf="1m" class="active">1m</button>
+            <button data-tf="5m">5m</button>
+            <button data-tf="15m">15m</button>
+            <button data-tf="1h">1h</button>
+            <button data-tf="4h">4h</button>
+            <button data-tf="1d">1d</button>
+          </div>
+        </div>
+        <canvas id="chart" height="360"></canvas>
+        <div class="chart-foot"><span id="chartMeta">—</span></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>24h</h2></div>
+        <dl class="stats" id="stats"></dl>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Order book</h2><span class="hint" id="spread">—</span></div>
+        <div class="book" id="book"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Recent trades</h2></div>
+        <div class="trades" id="trades"></div>
+      </section>
+
+      <section class="card full">
+        <div class="card-head"><h2>Connection</h2></div>
+        <dl class="stats" id="connStats"></dl>
+      </section>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>Order book</h2><span class="hint" id="spread">—</span></div>
-      <div class="book" id="book"></div>
-    </section>
+    <!-- ══ BOT STATUS ════════════════════════════════════════════════════ -->
+    <section class="page hidden" id="page-bot">
+      <div class="card full">
+        <div class="card-head">
+          <h2>Bot status</h2>
+          <span class="badge" id="botStateBadge">unknown</span>
+        </div>
+        <div id="botHeadline" class="headline">—</div>
+        <dl class="stats" id="botStats"></dl>
+      </div>
 
-    <section class="card">
-      <div class="card-head"><h2>Recent trades</h2></div>
-      <div class="trades" id="trades"></div>
-    </section>
-
-    <!-- Hidden unless the dashboard was started with --ai. -->
-    <section class="card ai-card hidden" id="aiCard">
-      <div class="card-head">
-        <h2>AI decisions</h2>
-        <span class="hint" id="aiVerdict">—</span>
-        <div class="ai-actions">
-          <button id="aiScanNow" class="ghost">Scan now</button>
-          <button id="aiKill" class="danger">Kill switch</button>
+      <div class="card full">
+        <div class="card-head"><h2>Recent fills</h2><span class="hint" id="fillCount">—</span></div>
+        <div class="table-wrap">
+          <table class="grid" id="fillTable">
+            <thead><tr><th>Time</th><th>Mode</th><th>Side</th><th>Symbol</th><th>Amount</th><th>Price</th><th>Fee</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
 
-      <div class="ai-status" id="aiStatus">loading…</div>
-      <div class="ai-health" id="aiHealth"></div>
+      <div class="card full">
+        <div class="card-head"><h2>Errors</h2></div>
+        <div id="botErrors" class="errors">—</div>
+      </div>
+    </section>
 
-      <div class="table-wrap">
-        <table class="ai-table" id="aiTable">
-          <thead>
-            <tr>
-              <th>Symbol</th><th>Model</th><th>Model score</th><th>Regime</th>
-              <th>Outcome</th><th>Why</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+    <!-- ══ AI DECISIONS ══════════════════════════════════════════════════ -->
+    <section class="page hidden" id="page-ai">
+      <div class="card full" id="aiUnavailable">
+        <div class="card-head"><h2>AI decisions</h2></div>
+        <p class="empty">
+          The AI stack is not running. Start the dashboard with <code>--ai</code> to enable it:
+        </p>
+        <pre class="cmd">npm run dashboard -- --ai --port=4173</pre>
+        <p class="hint">
+          Without <code>--autonomous</code> it evaluates and explains only, and never places an order.
+        </p>
       </div>
 
-      <p class="hint">
-        <strong>Model score</strong> is confidence in whatever the model chose — including
-        <code>NO_TRADE</code>. It is a ranking signal, not a probability of profit. A row reading
-        <code>LONG vetoed</code> means the model wanted to trade and the risk or permission engine
-        refused; those engines always outrank the model.
-      </p>
+      <div class="card full hidden" id="aiCard">
+        <div class="card-head">
+          <h2>AI decisions</h2>
+          <span class="hint" id="aiVerdict">—</span>
+          <div class="ai-actions">
+            <button id="aiScanNow" class="ghost">Scan now</button>
+            <button id="aiKill" class="danger">Kill switch</button>
+          </div>
+        </div>
 
-      <div class="ai-cols">
-        <div>
-          <h3>Permissions</h3>
-          <div class="perm-list" id="aiPerms"></div>
-          <p class="hint">Risk and permission engines outrank the model. Withdrawals are forbidden and cannot be granted.</p>
+        <div class="ai-status" id="aiStatus">loading…</div>
+        <div class="ai-health" id="aiHealth"></div>
+
+        <div class="table-wrap">
+          <table class="ai-table" id="aiTable">
+            <thead>
+              <tr>
+                <th>Symbol</th><th>Model</th><th>Model score</th><th>Regime</th>
+                <th>Outcome</th><th>Why</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
-        <div>
-          <h3>Audit trail</h3>
-          <div class="audit" id="aiAudit"></div>
+
+        <p class="hint">
+          <strong>Model score</strong> is confidence in whatever the model chose — including
+          <code>NO_TRADE</code>. It is a ranking signal, not a probability of profit. A row reading
+          <code>LONG vetoed</code> means the model wanted to trade and the risk or permission engine
+          refused; those engines always outrank the model.
+        </p>
+
+        <div class="ai-cols">
+          <div>
+            <h3>Permissions</h3>
+            <div class="perm-list" id="aiPerms"></div>
+            <p class="hint">Risk and permission engines outrank the model. Withdrawals are forbidden and cannot be granted.</p>
+          </div>
+          <div>
+            <h3>Audit trail</h3>
+            <div class="audit" id="aiAudit"></div>
+          </div>
         </div>
+      </div>
+    </section>
+
+    <!-- ══ SETUP ═════════════════════════════════════════════════════════ -->
+    <section class="page hidden" id="page-setup">
+      <div class="card full">
+        <div class="card-head"><h2>Setup</h2><span class="hint">nothing on this page contains a secret</span></div>
+
+        <h3 class="sub-head">1. Where the .env file goes</h3>
+        <p>
+          Create <code>.env</code> in the <strong>repository root</strong> — the same folder as
+          <code>package.json</code>. Copy <code>.env.example</code> as a starting point:
+        </p>
+        <pre class="cmd">cp .env.example .env</pre>
+        <p class="warn-note">
+          <code>.env</code> is listed in <code>.gitignore</code> and must stay there. Never commit
+          credentials, and never paste them into a browser field — this dashboard has no input for
+          them and does not need one.
+        </p>
+
+        <h3 class="sub-head">2. Environment variables</h3>
+        <div class="table-wrap">
+          <table class="grid" id="envTable">
+            <thead><tr><th>Variable</th><th>Set?</th><th>Value</th><th>Purpose</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <h3 class="sub-head">3. API key and secret</h3>
+        <dl class="stats" id="credStats"></dl>
+        <ol class="steps">
+          <li>Sign in at <code>https://api.zebpay.com</code> and open <strong>API Trading</strong>.</li>
+          <li>Create a key. Scope it <code>fetch:details</code> for private reads and the private WebSocket.</li>
+          <li>Add <code>futures:trading</code> as well if you want to place orders. A key doing full REST trading <em>and</em> private WebSocket events needs both scopes.</li>
+          <li>Put the key in <code>ZEBPAY_API_KEY</code> and the secret in <code>ZEBPAY_API_SECRET</code>.</li>
+          <li>Restart the dashboard. The secret is only ever used locally to sign requests — it is never sent and never displayed.</li>
+        </ol>
+
+        <h3 class="sub-head">4. Subaccount</h3>
+        <p>
+          Leave <code>ZEBPAY_SUBACCOUNT_ID</code> empty to trade on the main account. Set it to the
+          subaccount id to operate on that account; it is sent as the <code>subaccountid</code> header
+          on REST calls and included in the signed WebSocket handshake.
+        </p>
+
+        <h3 class="sub-head">5. API endpoints</h3>
+        <dl class="stats" id="endpointStats"></dl>
+        <p class="hint">
+          Override only if ZebPay publishes a different host. The defaults above are the documented
+          Futures endpoints.
+        </p>
+
+        <h3 class="sub-head">6. Start the dashboard</h3>
+        <div id="cmdList" class="cmds"></div>
+
+        <h3 class="sub-head">7. Verify it</h3>
+        <pre class="cmd">node bin/zepay.js doctor     # connectivity, clock skew, fees, safety
+npm run check:live           # validate the real API shapes</pre>
+      </div>
+    </section>
+
+    <!-- ══ FIX REPORT ════════════════════════════════════════════════════ -->
+    <section class="page hidden" id="page-report">
+      <div class="card full">
+        <div class="card-head">
+          <h2>Fix report</h2>
+          <span class="hint" id="reportMeta">—</span>
+          <div class="ai-actions">
+            <button id="reportCopy">Copy as text</button>
+            <button id="reportRefresh" class="ghost">Refresh</button>
+          </div>
+        </div>
+        <p class="hint">
+          Generated from this instance's actual state — not a generic checklist. Secrets are redacted
+          before the text is produced.
+        </p>
+        <div id="reportList"></div>
+        <pre class="cmd hidden" id="reportText"></pre>
       </div>
     </section>
   </main>
