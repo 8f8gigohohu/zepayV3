@@ -60,12 +60,13 @@ export async function runAi({ client, config, flags }) {
     for (const row of result.ranked) {
       // Show the model's own call alongside the final action, so a veto is
       // visibly a veto rather than looking like indecision.
-      const model = row.modelDirection && row.modelDirection !== row.action
-        ? `${row.modelDirection} vetoed`
+      const model = row.modelDirection ?? 'NO_TRADE';
+      const outcome = row.action === 'NO_TRADE' && model !== 'NO_TRADE'
+        ? `${model} vetoed`
         : row.action;
       process.stdout.write(
         `  ${row.symbol.padEnd(12)} ${String(row.score ?? 0).padStart(5)}%  ` +
-          `${(row.regime ?? '—').padEnd(16)} ${model.padEnd(13)} ${row.reason ?? row.why ?? ''}\n`,
+          `${(row.regime ?? '—').padEnd(16)} ${outcome.padEnd(13)} ${row.reason ?? row.why ?? ''}\n`,
       );
     }
     if (result.acted) {

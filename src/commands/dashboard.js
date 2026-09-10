@@ -68,10 +68,22 @@ export async function startDashboard({ client, config, flags }) {
 
     ai.runner.on('cycle', (r) => {
       const top = r.ranked?.[0];
+      if (!top) {
+        process.stdout.write(`  [ai] cycle ${r.cycle} · nothing scanned (${r.error ?? 'no symbols'})\n`);
+        return;
+      }
+      // `score` is confidence in whatever the model chose — including
+      // NO_TRADE. Printing "NO_TRADE (95%)" reads as 95% confidence about a
+      // trade that did not happen, so always name what the score belongs to.
+      const model = `${top.modelDirection ?? 'NO_TRADE'} @ ${top.score ?? 0}%`;
+      const outcome = r.acted
+        ? `ACTED ${r.acted.trace.action} ${r.acted.trace.symbol}`
+        : top.action === 'NO_TRADE' && top.modelDirection !== 'NO_TRADE'
+          ? `vetoed — ${top.reason}`
+          : 'no position';
       process.stdout.write(
         `  [ai] cycle ${r.cycle} · ${r.symbols} symbols · ${r.durationMs}ms · ` +
-          `${top ? `${top.symbol} ${top.action} (${top.score}%)` : 'nothing to rank'}` +
-          `${r.acted ? ` → ACTED ${r.acted.trace.action} ${r.acted.trace.symbol}` : ''}\n`,
+          `${top.symbol} ${top.regime ?? '—'} · model ${model} → ${outcome}\n`,
       );
     });
     ai.runner.on('error', (e) => process.stdout.write(`  [ai] error: ${e.message}\n`));

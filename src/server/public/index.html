@@ -83,13 +83,20 @@
         <table class="ai-table" id="aiTable">
           <thead>
             <tr>
-              <th>Symbol</th><th>Model</th><th>Score</th><th>Regime</th>
+              <th>Symbol</th><th>Model</th><th>Model score</th><th>Regime</th>
               <th>Outcome</th><th>Why</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
+
+      <p class="hint">
+        <strong>Model score</strong> is confidence in whatever the model chose — including
+        <code>NO_TRADE</code>. It is a ranking signal, not a probability of profit. A row reading
+        <code>LONG vetoed</code> means the model wanted to trade and the risk or permission engine
+        refused; those engines always outrank the model.
+      </p>
 
       <div class="ai-cols">
         <div>
