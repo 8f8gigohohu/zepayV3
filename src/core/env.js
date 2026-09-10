@@ -64,6 +64,20 @@ export function envInt(name, fallback) {
 }
 
 /**
+ * Read a floating-point env var, falling back when unset or unparseable.
+ *
+ * Separate from `envInt` because risk parameters are fractional (a 0.5% risk
+ * budget, a 0.05% edge floor) and truncating them to integers would silently
+ * change what the risk engine enforces.
+ */
+export function envNum(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
  * Resolve the full runtime configuration.
  *
  * Credentials are optional: everything public works without them, and the

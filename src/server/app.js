@@ -30,15 +30,16 @@ const MIME = {
  * @param {import('../strategy/engine.js').StrategyEngine} [opts.engine]
  * @param {string} [opts.symbol]
  * @param {'live'|'demo'} [opts.mode]
+ * @param {object} [opts.ai] autonomous bundle from `buildAutonomous()`
  */
-export function createDashboardServer({ feed, engine, symbol = 'BTCINR', mode = 'live' }) {
+export function createDashboardServer({ feed, engine, symbol = 'BTCINR', mode = 'live', ai = null }) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
     try {
       if (req.method === 'GET' && path === '/api/stream') return sse(req, res, feed);
-      if (req.method === 'GET' && path.startsWith('/api/')) return api(req, res, url, { feed, engine, symbol, mode });
+      if (path.startsWith('/api/')) return api(req, res, url, { feed, engine, symbol, mode, ai });
       return serveStatic(req, res, path);
     } catch (err) {
       sendJson(res, 500, { error: err.message });
@@ -48,11 +49,18 @@ export function createDashboardServer({ feed, engine, symbol = 'BTCINR', mode = 
   // Keep a reference so callers can shut the feed down with the server.
   server.feed = feed;
   server.engine = engine;
+  server.ai = ai;
   return server;
 }
 
-async function api(req, res, url, { feed, engine, symbol, mode }) {
+async function api(req, res, url, { feed, engine, symbol, mode, ai }) {
   const path = url.pathname;
+
+  // ── Autonomous AI routes. Kept ahead of the GET switch because several are
+  //    POST and all of them are operator controls, not read-only views.
+  if (path.startsWith('/api/ai')) return aiApi(req, res, url, { ai, mode });
+
+  if (req.method !== 'GET') return sendJson(res, 405, { error: `${req.method} not allowed on ${path}` });
 
   switch (path) {
     case '/api/config':
@@ -95,6 +103,183 @@ async function api(req, res, url, { feed, engine, symbol, mode }) {
     default:
       return sendJson(res, 404, { error: `unknown route ${path}` });
   }
+}
+
+/**
+ * Autonomous-trading API.
+ *
+ * Every write route is an operator control that moves the system *toward*
+ * safety or away from it deliberately, so each one is audited by the engines it
+ * touches. Note what is deliberately absent: there is no endpoint that places an
+ * order directly. The only path to an order runs through the pipeline's gate
+ * sequence.
+ */
+async function aiApi(req, res, url, { ai, mode }) {
+  const path = url.pathname;
+  if (!ai) return sendJson(res, 503, { error: 'autonomous trading is not enabled (start with --ai)' });
+
+  switch (path) {
+    case '/api/ai/status':
+      return sendJson(res, 200, {
+        mode,
+        runner: ai.runner.status(),
+        account: {
+          equity: ai.accountState.equity,
+          equitySource: ai.accountState.equitySource,
+          lastError: ai.accountState.lastError,
+          lastCheckedAt: ai.accountState.lastCheckedAt,
+          hasCredentials: ai.hasCredentials,
+        },
+        gatewayMode: ai.gateway.mode,
+        allowLive: ai.allowLive,
+      });
+
+    case '/api/ai/scan': {
+      const result = ai.runner.lastResult;
+      return sendJson(res, 200, {
+        cycle: result?.cycle ?? 0,
+        at: result?.at ?? null,
+        ok: result?.ok ?? false,
+        error: result?.error ?? null,
+        symbols: result?.symbols ?? 0,
+        durationMs: result?.durationMs ?? null,
+        ranked: result?.ranked ?? [],
+        acted: result?.acted?.trace
+          ? { symbol: result.acted.trace.symbol, action: result.acted.trace.action }
+          : null,
+      });
+    }
+
+    // Full trace for one symbol: the "why not trading" answer, without
+    // executing anything.
+    case '/api/ai/trace': {
+      const sym = url.searchParams.get('symbol');
+      if (!sym) return sendJson(res, 400, { error: 'symbol is required' });
+      try {
+        return sendJson(res, 200, await ai.pipeline.evaluate(sym));
+      } catch (err) {
+        return sendJson(res, 200, { symbol: sym, action: 'NO_TRADE', reasons: [err.message], stage: 'error' });
+      }
+    }
+
+    case '/api/ai/cycle': {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'POST required' });
+      const result = await ai.runner.cycle();
+      return sendJson(res, 200, { ok: result.ok, error: result.error, ranked: result.ranked, symbols: result.symbols });
+    }
+
+    case '/api/ai/permissions':
+      if (req.method === 'GET') return sendJson(res, 200, { permissions: ai.permissions.describe(), snapshot: ai.permissions.snapshot() });
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        if (!body.key) return sendJson(res, 400, { error: 'key is required' });
+        try {
+          const value = ai.permissions.set(body.key, Boolean(body.value), body.actor ?? 'dashboard');
+          return sendJson(res, 200, { key: body.key, value, permissions: ai.permissions.snapshot() });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+      return sendJson(res, 405, { error: `${req.method} not allowed` });
+
+    case '/api/ai/killswitch': {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, { error: 'POST required', status: ai.killSwitch.status() });
+      }
+      const body = await readBody(req);
+      const action = body.action ?? 'engage';
+      // Every transition needs a reason — an unexplained kill-switch change is
+      // exactly what an audit trail must not contain.
+      if (!body.reason) return sendJson(res, 400, { error: 'a reason is required' });
+      try {
+        if (action === 'engage') ai.killSwitch.engage(body.reason);
+        else if (action === 'resume') ai.killSwitch.resume(body.reason);
+        else if (action === 'resetBreaker') { ai.killSwitch.resetBreaker(); ai.audit.record('BREAKER_RESET', { reason: body.reason }); }
+        else return sendJson(res, 400, { error: `unknown action ${action}` });
+      } catch (err) {
+        return sendJson(res, 400, { error: err.message });
+      }
+      return sendJson(res, 200, { status: ai.killSwitch.status() });
+    }
+
+    case '/api/ai/audit': {
+      const limit = Math.min(500, Number(url.searchParams.get('limit') ?? 100));
+      const type = url.searchParams.get('type') ?? null;
+      return sendJson(res, 200, { records: ai.audit.tail(limit, type), summary: ai.audit.summary() });
+    }
+
+    case '/api/ai/health': {
+      // Probes the upstream the way the runner would, so the UI can show a
+      // real readiness answer rather than an assumption.
+      const checks = [];
+      const add = (name, ok, detail) => checks.push({ name, ok, detail });
+      try {
+        const account = await ai.fetchAccount();
+        add('account', account.equity > 0,
+          account.equity > 0
+            ? `equity ${account.equity} from ${ai.accountState.equitySource}`
+            : `unavailable — ${ai.accountState.lastError ?? 'unknown'}`);
+      } catch (err) {
+        add('account', false, err.message);
+      }
+      add('credentials', ai.hasCredentials, ai.hasCredentials ? 'api key + secret present' : 'missing');
+      add('feed', mode === 'live', mode === 'live' ? 'live upstream' : 'synthetic demo data');
+      add('universe', ai.runner.symbols.length > 0,
+        `${ai.runner.symbols.length} symbols${ai.runner.universeError ? ` (${ai.runner.universeError})` : ''}`);
+      add('kill switch', !ai.killSwitch.blocked, ai.killSwitch.blocked ? ai.killSwitch.reason : 'clear');
+      add('autonomous entries', ai.permissions.can('autonomousEntries'),
+        ai.permissions.can('autonomousEntries') ? 'enabled' : 'disabled');
+      const ok = checks.every((c) => c.ok);
+      // Three honest verdicts rather than one boolean. "NOT TRADING" is reserved
+      // for a pipeline that genuinely cannot evaluate; a functioning pipeline on
+      // synthetic data or without credentials is *paper only*, which is a very
+      // different statement and must not be dressed up as either failure or
+      // readiness for live money.
+      const pipelineWorking = ai.runner.lastResult?.ok ?? false;
+      const verdict = !pipelineWorking
+        ? 'NOT TRADING'
+        : ok && ai.allowLive
+          ? 'READY (LIVE)'
+          : 'PAPER ONLY';
+      return sendJson(res, 200, { ok, verdict, checks });
+    }
+
+    default:
+      return sendJson(res, 404, { error: `unknown route ${path}` });
+  }
+}
+
+/** Parse a small JSON request body. Returns `{}` rather than throwing on junk. */
+async function readBody(req, limit = 8192) {
+  return new Promise((resolve) => {
+    let raw = '';
+    let done = false;
+    let oversized = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+    req.on('data', (chunk) => {
+      if (oversized) return;
+      // Check *after* appending: a single chunk larger than the cap would
+      // otherwise sail through untouched, which is the common case.
+      raw += chunk;
+      if (raw.length > limit) {
+        oversized = true;
+        raw = ''; // drop it; the handler replies 400 rather than parsing junk
+      }
+    });
+    req.on('end', () => {
+      if (oversized) return finish({});
+      try {
+        finish(raw ? JSON.parse(raw) : {});
+      } catch {
+        finish({});
+      }
+    });
+    req.on('error', () => finish({}));
+  });
 }
 
 /** Server-Sent Events: push every feed update to all connected browsers. */
@@ -169,5 +354,11 @@ export async function buildFeed({ client, symbol, forceDemo = false, intervalMs 
     const demo = new DemoMarketFeed({ symbol, intervalMs: 1_000 });
     return { feed: demo, mode: 'demo', reason };
   }
-  return { feed: new DemoMarketFeed({ symbol, intervalMs: 1_000 }), mode: 'demo' };
+  // The operator asked for demo data, so there is no upstream failure to
+  // report — saying "unavailable (unknown)" here would be misleading.
+  return {
+    feed: new DemoMarketFeed({ symbol, intervalMs: 1_000 }),
+    mode: 'demo',
+    reason: 'demo mode requested (--demo); live upstream was not contacted',
+  };
 }

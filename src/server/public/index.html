@@ -64,6 +64,45 @@
       <div class="card-head"><h2>Recent trades</h2></div>
       <div class="trades" id="trades"></div>
     </section>
+
+    <!-- Hidden unless the dashboard was started with --ai. -->
+    <section class="card ai-card hidden" id="aiCard">
+      <div class="card-head">
+        <h2>AI decisions</h2>
+        <span class="hint" id="aiVerdict">—</span>
+        <div class="ai-actions">
+          <button id="aiScanNow" class="ghost">Scan now</button>
+          <button id="aiKill" class="danger">Kill switch</button>
+        </div>
+      </div>
+
+      <div class="ai-status" id="aiStatus">loading…</div>
+      <div class="ai-health" id="aiHealth"></div>
+
+      <div class="table-wrap">
+        <table class="ai-table" id="aiTable">
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Model</th><th>Score</th><th>Regime</th>
+              <th>Outcome</th><th>Why</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="ai-cols">
+        <div>
+          <h3>Permissions</h3>
+          <div class="perm-list" id="aiPerms"></div>
+          <p class="hint">Risk and permission engines outrank the model. Withdrawals are forbidden and cannot be granted.</p>
+        </div>
+        <div>
+          <h3>Audit trail</h3>
+          <div class="audit" id="aiAudit"></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer>

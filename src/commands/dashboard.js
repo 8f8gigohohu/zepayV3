@@ -23,7 +23,7 @@ export async function startDashboard({ client, config, flags }) {
 
   if (mode === 'demo') {
     process.stdout.write(
-      `⚠ live upstream unavailable (${reason ?? 'unknown'}); using synthetic demo data.\n` +
+      `${forceDemo ? '·' : '⚠'} ${reason ?? 'live upstream unavailable'}; using synthetic demo data.\n` +
         `  The dashboard will be labelled as demo and no real prices are shown.\n`,
     );
   } else {
@@ -52,7 +52,52 @@ export async function startDashboard({ client, config, flags }) {
     await engine.start();
   }
 
-  const server = createDashboardServer({ feed, engine, symbol, mode });
+  // Optionally run the AI autonomous stack. Evaluation runs regardless of the
+  // `--autonomous` flag — deciding and explaining are free, executing is not.
+  let ai = null;
+  if (flags.ai === true) {
+    const { buildAutonomous } = await import('./ai-factory.js');
+    ai = buildAutonomous({ client, config, flags, feed, feedMode: mode });
+
+    // Autonomous execution is a separate, opt-in step and defaults off.
+    const autonomous = flags.autonomous === true;
+    if (autonomous) {
+      ai.permissions.set('autonomousEntries', true, 'cli');
+      ai.permissions.set('autonomousExits', true, 'cli');
+    }
+
+    ai.runner.on('cycle', (r) => {
+      const top = r.ranked?.[0];
+      process.stdout.write(
+        `  [ai] cycle ${r.cycle} · ${r.symbols} symbols · ${r.durationMs}ms · ` +
+          `${top ? `${top.symbol} ${top.action} (${top.score}%)` : 'nothing to rank'}` +
+          `${r.acted ? ` → ACTED ${r.acted.trace.action} ${r.acted.trace.symbol}` : ''}\n`,
+      );
+    });
+    ai.runner.on('error', (e) => process.stdout.write(`  [ai] error: ${e.message}\n`));
+    ai.killSwitch.on('engage', (e) =>
+      process.stdout.write(`  [ai] ⛔ KILL SWITCH ENGAGED: ${e.reason}\n`),
+    );
+    // Log the resume too. Without it the log reads as "engaged, then traded
+    // anyway", which looks exactly like a safety failure even when it is not.
+    ai.killSwitch.on('resume', (e) =>
+      process.stdout.write(`  [ai] ▶ kill switch resumed: ${e.reason}\n`),
+    );
+    ai.killSwitch.on('trip', (e) =>
+      process.stdout.write(`  [ai] ⛔ breaker tripped: ${e.code} ${e.detail}\n`),
+    );
+
+    process.stdout.write(
+      `  [ai] autonomous execution ${autonomous ? 'ENABLED' : 'disabled'} · ` +
+        `order mode ${ai.gateway.mode} · credentials ${ai.hasCredentials ? 'present' : 'missing'}\n`,
+    );
+    if (!autonomous) {
+      process.stdout.write(`  [ai] evaluating and explaining only; pass --autonomous to let it act.\n`);
+    }
+    ai.runner.start();
+  }
+
+  const server = createDashboardServer({ feed, engine, symbol, mode, ai });
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -67,6 +112,7 @@ export async function startDashboard({ client, config, flags }) {
 
   const shutdown = () => {
     feed.stop();
+    ai?.runner.stop();
     server.close(() => process.exit(0));
     // Force-exit if a keep-alive connection holds the server open.
     setTimeout(() => process.exit(0), 1000).unref();

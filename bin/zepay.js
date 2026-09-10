@@ -25,12 +25,17 @@ Private (needs ZEBPAY_API_KEY / ZEBPAY_API_SECRET)
   positions                 open positions
   orders                    open orders
 
+AI autonomous stack
+  ai                        scan + decide + explain  [--cycles=1] [--autonomous]
+  doctor                    environment and readiness check
+
 Runners
-  dashboard                 live BTC-INR dashboard  --port=4173 --symbol=BTCINR [--bot] [--demo]
+  dashboard                 live BTC-INR dashboard  --port=4173 --symbol=BTCINR [--bot] [--ai] [--demo]
   run                       strategy engine         --tf=1m --amount=0.001 [--demo] [--live]
 
 Flags
   --symbol=BTC-INR          pair, dash or concatenated form
+  --symbols=BTCINR,ETHINR   comma-separated universe for the AI scanner
   --tf=1m                   kline timeframe
   --limit=20                result count
   --port=4173               dashboard port
@@ -38,9 +43,21 @@ Flags
   --fast=9 --slow=21        EMA periods for the reference strategy
   --short                   allow the strategy to open short positions
   --bot                     run the strategy engine alongside the dashboard
+  --ai                      run the AI stack alongside the dashboard (evaluate only)
+  --autonomous              let the AI actually open positions (dry-run unless --live)
+  --cycles=1                number of AI scan cycles to run headlessly
+  --scanMs=60000            milliseconds between AI scan cycles
+  --minScore=0.55           model confidence floor below which the answer is NO_TRADE
+  --riskPerTradePct=1       equity percentage risked per trade
+  --maxLeverage=10          hard leverage ceiling for the risk engine
+  --maxSymbols=25           universe size cap for the scanner
+  --paperEquity=100000      hypothetical balance for paper sizing (refused if --live)
   --demo                    force synthetic data (also disables live trading)
   --live                    allow real orders (also needs ZEBPAY_ALLOW_LIVE=true)
   --help                    this text
+
+Nothing here trades real money unless you pass both --live and set
+ZEBPAY_ALLOW_LIVE=true. NO_TRADE is the expected answer most of the time.
 `;
 
 function parseFlags(argv) {
@@ -189,6 +206,18 @@ async function main() {
     case 'run': {
       const { runStrategy } = await import('../src/commands/run.js');
       await runStrategy({ client, config, flags });
+      break;
+    }
+
+    case 'ai': {
+      const { runAi } = await import('../src/commands/ai.js');
+      await runAi({ client, config, flags });
+      break;
+    }
+
+    case 'doctor': {
+      const { runDoctor } = await import('../src/commands/doctor.js');
+      await runDoctor({ client, config, flags });
       break;
     }
 

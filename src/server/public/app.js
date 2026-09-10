@@ -319,3 +319,197 @@ loadCandles();
 connectStream();
 // Refresh candles periodically so newly closed bars appear without a reload.
 setInterval(loadCandles, 30_000);
+
+/* ── AI autonomous panel ─────────────────────────────────────────────────── */
+/*
+ * Self-contained: it activates only when the server was started with --ai, and
+ * silently stays hidden otherwise. All state comes from the server; the browser
+ * never talks to ZebPay and never holds a credential.
+ */
+
+const ai = { enabled: false, timer: null };
+
+async function aiGet(path) {
+  const r = await fetch(path, { headers: { Accept: 'application/json' } });
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  return r.json();
+}
+
+async function aiPost(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error ?? `${r.status} ${path}`);
+  return data;
+}
+
+function aiRow(cells, cls = '') {
+  const tr = document.createElement('tr');
+  if (cls) tr.className = cls;
+  for (const c of cells) {
+    const td = document.createElement('td');
+    td.textContent = c;
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
+function renderScan(rows) {
+  const body = $('aiTable').querySelector('tbody');
+  body.textContent = '';
+  if (!rows.length) {
+    body.appendChild(aiRow(['no symbols scanned yet', '', '', '', '', '']));
+    return;
+  }
+  for (const r of rows) {
+    const vetoed = r.modelDirection && r.modelDirection !== r.action;
+    const outcome = vetoed ? `${r.modelDirection} vetoed` : r.action;
+    body.appendChild(
+      aiRow(
+        [
+          displayPair(r.symbol),
+          r.modelDirection ?? '—',
+          `${r.score ?? 0}%`,
+          r.regime ?? '—',
+          outcome,
+          r.reason ?? r.why ?? '',
+        ],
+        r.action === 'NO_TRADE' ? 'no-trade' : 'acted',
+      ),
+    );
+  }
+}
+
+function renderHealth(checks) {
+  const el = $('aiHealth');
+  el.textContent = '';
+  for (const c of checks ?? []) {
+    const d = document.createElement('div');
+    d.className = `check ${c.ok ? 'ok' : 'bad'}`;
+    d.textContent = `${c.ok ? '✓' : '✗'} ${c.name}: ${c.detail}`;
+    el.appendChild(d);
+  }
+}
+
+function renderPerms(permissions) {
+  const el = $('aiPerms');
+  el.textContent = '';
+  for (const p of permissions ?? []) {
+    const row = document.createElement('label');
+    row.className = 'perm';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = Boolean(p.enabled);
+    // Forbidden capabilities cannot be granted, so the control is disabled —
+    // showing an enabled toggle that silently does nothing would be worse.
+    box.disabled = Boolean(p.forbidden);
+    box.addEventListener('change', async () => {
+      try {
+        await aiPost('/api/ai/permissions', { key: p.key, value: box.checked, actor: 'dashboard' });
+        await refreshAi();
+      } catch (err) {
+        box.checked = !box.checked;
+        $('aiStatus').textContent = `permission error: ${err.message}`;
+      }
+    });
+    row.appendChild(box);
+    const span = document.createElement('span');
+    span.textContent = `${p.label ?? p.key}${p.forbidden ? ' (forbidden)' : p.dangerous ? ' ⚠' : ''}`;
+    span.title = p.key;
+    row.appendChild(span);
+    el.appendChild(row);
+  }
+}
+
+function renderAudit(records) {
+  const el = $('aiAudit');
+  el.textContent = '';
+  for (const r of (records ?? []).slice(-30).reverse()) {
+    const line = document.createElement('div');
+    line.className = 'audit-row';
+    const at = r.at ? new Date(r.at).toLocaleTimeString('en-IN', { hour12: false }) : '';
+    line.textContent = `${at} ${r.type}${r.data?.symbol ? ` ${r.data.symbol}` : ''}`;
+    el.appendChild(line);
+  }
+}
+
+async function refreshAi() {
+  if (!ai.enabled) return;
+  try {
+    const [status, scan, health, perms, audit] = await Promise.all([
+      aiGet('/api/ai/status'),
+      aiGet('/api/ai/scan'),
+      aiGet('/api/ai/health'),
+      aiGet('/api/ai/permissions'),
+      aiGet('/api/ai/audit?limit=30'),
+    ]);
+
+    const acc = status.account;
+    const ks = status.runner.pipeline?.killSwitch;
+    $('aiStatus').textContent =
+      `cycle ${scan.cycle} · ${scan.symbols} symbols · ${scan.durationMs ?? '—'}ms · ` +
+      `equity ${acc.equity > 0 ? acc.equity : 'unavailable'} (${acc.equitySource ?? 'unknown source'}) · ` +
+      `orders ${status.gatewayMode} · live ${status.allowLive ? 'ALLOWED' : 'blocked'}` +
+      `${ks?.blocked ? ' · ⛔ KILL SWITCH ENGAGED' : ''}`;
+
+    $('aiVerdict').textContent = health.verdict;
+    $('aiVerdict').className = `hint ${health.ok ? 'ok' : 'bad'}`;
+    $('aiKill').textContent = ks?.blocked ? 'Resume' : 'Kill switch';
+    $('aiKill').classList.toggle('armed', Boolean(ks?.blocked));
+
+    renderHealth(health.checks);
+    renderScan(scan.ranked ?? []);
+    renderPerms(perms.permissions);
+    renderAudit(audit.records);
+  } catch (err) {
+    $('aiStatus').textContent = `ai panel error: ${err.message}`;
+  }
+}
+
+async function initAi() {
+  try {
+    const r = await fetch('/api/ai/status');
+    if (!r.ok) return; // not started with --ai: leave the panel hidden
+  } catch {
+    return;
+  }
+  ai.enabled = true;
+  $('aiCard').classList.remove('hidden');
+
+  $('aiScanNow').addEventListener('click', async () => {
+    $('aiScanNow').disabled = true;
+    $('aiScanNow').textContent = 'scanning…';
+    try {
+      await aiPost('/api/ai/cycle', {});
+      await refreshAi();
+    } catch (err) {
+      $('aiStatus').textContent = `scan error: ${err.message}`;
+    } finally {
+      $('aiScanNow').disabled = false;
+      $('aiScanNow').textContent = 'Scan now';
+    }
+  });
+
+  $('aiKill').addEventListener('click', async () => {
+    const armed = $('aiKill').classList.contains('armed');
+    const reason = window.prompt(
+      armed ? 'Reason for resuming trading:' : 'Reason for engaging the kill switch:',
+      armed ? 'operator resumed' : 'operator halt from dashboard',
+    );
+    if (!reason) return;
+    try {
+      await aiPost('/api/ai/killswitch', { action: armed ? 'resume' : 'engage', reason });
+      await refreshAi();
+    } catch (err) {
+      $('aiStatus').textContent = `kill switch error: ${err.message}`;
+    }
+  });
+
+  await refreshAi();
+  ai.timer = setInterval(refreshAi, 10_000);
+}
+
+initAi();

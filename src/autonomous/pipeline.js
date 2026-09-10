@@ -102,11 +102,31 @@ export class AutonomousPipeline {
     }
 
     // ── 7-9. Geometry + sizing
-    const account = await this.fetchAccount();
+    let account;
+    try {
+      account = await this.fetchAccount();
+    } catch (err) {
+      trace.stage = 'account';
+      trace.reasons.push(`account unavailable: ${err.message}`);
+      return trace;
+    }
+
     const geo = decision.geometry;
     if (!geo) {
       trace.stage = 'geometry';
       trace.reasons.push('no trade geometry could be derived (missing ATR or price)');
+      return trace;
+    }
+
+    // Gate equity explicitly rather than letting sizeByRisk throw. The spec
+    // requires a reason for every non-trade, and "no account balance available"
+    // is a legitimate one — an exception bubbling out would leave the operator
+    // with a stack trace instead of an explanation.
+    trace.stage = 'sizing';
+    if (!(account.equity > 0)) {
+      trace.reasons.push(
+        `no account equity available (${account.equitySource ? `source ${account.equitySource}` : 'balance not readable'}) — refusing to size a position on an unknown balance`,
+      );
       return trace;
     }
 
@@ -124,7 +144,6 @@ export class AutonomousPipeline {
       ),
     });
     trace.sizing = sizing;
-    trace.stage = 'sizing';
 
     if (sizing.quantity <= 0) {
       trace.reasons.push(`position size is zero (capped by ${sizing.cappedBy})`);
@@ -303,17 +322,27 @@ function summarise(trace) {
     return {
       symbol: trace.symbol,
       action: 'NO_TRADE',
-      score: 0,
-      reason: trace.reasons[0] ?? 'no setup',
+      // The model's own view is reported even when a later gate vetoed the
+      // trade. "Why not trading" has to distinguish "the model saw nothing"
+      // from "the model wanted to trade and risk/permissions said no" — those
+      // are different answers and the operator needs to see which one it is.
+      modelDirection: d?.direction ?? null,
+      score: round((d?.confidence ?? 0) * 100, 1),
       regime: d?.regime ?? null,
+      strategy: d?.strategy ?? null,
+      stage: trace.stage,
+      reason: trace.reasons[0] ?? 'no setup',
+      reasons: trace.reasons.slice(0, 5),
     };
   }
   return {
     symbol: trace.symbol,
     action: d.direction,
+    modelDirection: d.direction,
     score: round(d.confidence * 100, 1),
     regime: d.regime,
     strategy: d.strategy,
+    stage: trace.stage,
     entry: trace.projection.entryPrice,
     stop: trace.decision.geometry?.stopLoss ?? null,
     target: trace.decision.geometry?.target ?? null,

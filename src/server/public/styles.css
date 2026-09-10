@@ -153,3 +153,85 @@ footer {
   main { grid-template-columns: 1fr; }
   .chart-card { grid-row: auto; }
 }
+
+/* ── AI panel ────────────────────────────────────────────────────────────── */
+
+.ai-card { grid-column: 1 / -1; }
+
+.ai-card .card-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ai-card .card-head h2 { margin-right: 4px; }
+.ai-card .hint.ok { color: var(--green); }
+.ai-card .hint.bad { color: var(--red); }
+
+.ai-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.ai-card button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ai-card button:hover { border-color: var(--accent); }
+.ai-card button:disabled { opacity: 0.5; cursor: default; }
+.ai-card button.danger { border-color: #5a2b2b; color: #ffb4b2; }
+.ai-card button.danger:hover { background: #3a1c1c; border-color: var(--red); }
+.ai-card button.danger.armed { background: #3a1c1c; border-color: var(--red); }
+
+.ai-status {
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  font-size: 13px;
+  padding: 4px 0 10px;
+}
+
+.ai-health { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-bottom: 12px; }
+.ai-health .check { font-size: 12px; font-variant-numeric: tabular-nums; }
+.ai-health .check.ok { color: var(--green); }
+.ai-health .check.bad { color: var(--red); }
+
+.table-wrap { overflow-x: auto; }
+
+.ai-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ai-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ai-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #1b2030;
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+.ai-table tr.acted td { color: var(--green); }
+.ai-table tr.no-trade td:nth-child(5) { color: var(--dim); }
+.ai-table td:last-child { color: var(--dim); font-variant-numeric: normal; }
+
+.ai-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 16px; }
+.ai-cols h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); }
+@media (max-width: 900px) { .ai-cols { grid-template-columns: 1fr; } }
+
+.perm-list { display: flex; flex-direction: column; gap: 4px; }
+.perm { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.perm input:disabled { cursor: not-allowed; }
+.perm span { color: var(--text); }
+
+.audit {
+  max-height: 220px;
+  overflow-y: auto;
+  background: #0e121b;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.audit-row { color: var(--dim); white-space: nowrap; }
