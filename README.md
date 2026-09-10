@@ -8,11 +8,11 @@ cross-checked against [`zebpay/zebpay-api-references`](https://github.com/zebpay
 
 - **Node.js 20+**, ESM, no build step
 - **One runtime dependency** (`socket.io-client`, and only for the private WebSocket)
-- **331 tests**, `node:test`, no test framework to install
+- **336 tests**, `node:test`, no test framework to install
 
 ```
 npm install
-npm test            # 331 tests
+npm test            # 336 tests
 npm run dashboard   # live BTC-INR dashboard
 npm run bot         # strategy engine, dry-run by default
 npm run check:live  # smoke-test the real API from a networked machine

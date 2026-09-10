@@ -45,7 +45,7 @@ export {
   KLINE_TIMEFRAMES,
   TIMEFRAME_MS,
 } from './core/symbols.js';
-export { loadEnv, resolveConfig, envFlag, envStr, envInt } from './core/env.js';
+export { loadEnv, resolveConfig, envFlag, envStr, envInt, envNum } from './core/env.js';
 export { PrivateStream } from './ws/PrivateStream.js';
 export { OrderGateway } from './strategy/OrderGateway.js';
 export { StrategyEngine, dropFormingCandle } from './strategy/engine.js';
@@ -53,3 +53,32 @@ export { createEmaCrossStrategy } from './strategy/strategies/emaCross.js';
 export { sma, ema, rsi, atr, rollingExtremes, closes } from './strategy/indicators.js';
 export { MarketFeed, DemoMarketFeed } from './server/marketFeed.js';
 export { createDashboardServer, buildFeed } from './server/app.js';
+
+/* ── AI autonomous stack ───────────────────────────────────────────────────── */
+
+export { extractFeatures, extractBookFeatures, classifyRegime } from './ai/features.js';
+export {
+  createDecisionEngine,
+  DEFAULT_WEIGHTS,
+  DEFAULT_GEOMETRY,
+  REGIME_STRATEGY,
+} from './ai/engine.js';
+export { projectTrade, sizeByRisk, DEFAULT_COST_CONFIG } from './costs/engine.js';
+export { RiskEngine, DEFAULT_RISK_LIMITS } from './risk/engine.js';
+export { KillSwitch } from './risk/killswitch.js';
+export { PermissionEngine, DEFAULT_PERMISSIONS } from './permissions/engine.js';
+export { AuditLog, redact } from './audit/log.js';
+export {
+  discoverUniverse,
+  fetchSymbolData,
+  rankByTicker,
+  DEFAULT_UNIVERSE_FILTER,
+} from './scanner/scanner.js';
+export { AutonomousPipeline } from './autonomous/pipeline.js';
+export { AutonomousRunner } from './autonomous/runner.js';
+export {
+  buildAutonomous,
+  readEquity,
+  normalisePositions,
+  simulatedPositions,
+} from './commands/ai-factory.js';
