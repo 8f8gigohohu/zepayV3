@@ -1,0 +1,17 @@
+# Secrets — never commit credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime
+node_modules/
+data/
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

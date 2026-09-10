@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ZebPay Futures — BTC-INR</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>₿</text></svg>" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">₿</span>
+      <div>
+        <h1>ZebPay Futures</h1>
+        <p class="sub" id="pairLabel">BTC-INR · PERPETUAL</p>
+      </div>
+    </div>
+
+    <div class="price-block">
+      <div class="price" id="lastPrice">—</div>
+      <div class="change" id="change">—</div>
+    </div>
+
+    <div class="badges">
+      <span class="badge" id="modeBadge">connecting…</span>
+      <span class="badge" id="botBadge">bot idle</span>
+      <span class="badge dim" id="linkBadge">offline</span>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <main>
+    <section class="card chart-card">
+      <div class="card-head">
+        <h2>Price</h2>
+        <div class="tf-group" id="tfGroup">
+          <button data-tf="1m" class="active">1m</button>
+          <button data-tf="5m">5m</button>
+          <button data-tf="15m">15m</button>
+          <button data-tf="1h">1h</button>
+          <button data-tf="4h">4h</button>
+          <button data-tf="1d">1d</button>
+        </div>
+      </div>
+      <canvas id="chart" height="360"></canvas>
+      <div class="chart-foot">
+        <span id="chartMeta">—</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>24h</h2></div>
+      <dl class="stats" id="stats"></dl>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Order book</h2><span class="hint" id="spread">—</span></div>
+      <div class="book" id="book"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Recent trades</h2></div>
+      <div class="trades" id="trades"></div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footStatus">—</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

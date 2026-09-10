@@ -1,0 +1,34 @@
+{
+  "name": "zepayv3",
+  "version": "3.0.0",
+  "description": "ZebPay Futures client SDK, dry-run strategy engine and live BTC-INR dashboard",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "zepay": "./bin/zepay.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "dashboard": "node bin/zepay.js dashboard",
+    "bot": "node bin/zepay.js run",
+    "check:live": "node scripts/live-check.js"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.1"
+  },
+  "keywords": [
+    "zebpay",
+    "futures",
+    "crypto",
+    "trading",
+    "btcinr"
+  ],
+  "license": "MIT",
+  "private": true
+}
