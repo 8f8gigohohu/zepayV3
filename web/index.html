@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10151c">
+  <meta name="description" content="A guarded ZebPay spot trading desk with paper mode, risk controls, and optional research signals.">
+  <title>Zepay · Trading Desk</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Zepay trading desk home">
+        <span class="brand-mark">Z</span>
+        <span class="brand-copy"><strong>ZEPAY</strong><small>TRADING DESK</small></span>
+      </a>
+      <div class="workspace-label">WORKSPACE</div>
+      <nav class="nav-list" aria-label="Main navigation">
+        <a href="#overview" class="nav-link selected"><span class="nav-icon">◫</span> Overview <span class="nav-dot"></span></a>
+        <a href="#market" class="nav-link"><span class="nav-icon">⌁</span> Markets</a>
+        <a href="#signals" class="nav-link"><span class="nav-icon">◈</span> Research signals</a>
+        <a href="#orders" class="nav-link"><span class="nav-icon">⇄</span> Orders</a>
+      </nav>
+
+      <div class="sidebar-divider"></div>
+      <div class="workspace-label">INTEGRATIONS</div>
+      <div class="integration-row"><span class="integration-glyph zebpay-glyph">Z</span><span><strong>ZebPay Spot</strong><small>Exchange adapter</small></span><span id="exchangeDot" class="connection-dot"></span></div>
+      <div class="integration-row"><span class="integration-glyph kronos-glyph">K</span><span><strong>Kronos</strong><small id="kronosSideStatus">Research model</small></span><span id="kronosDot" class="connection-dot muted"></span></div>
+      <div class="integration-row"><span class="integration-glyph hummingbot-glyph">H</span><span><strong>Hummingbot</strong><small>Connector extension</small></span><span class="connection-dot muted"></span></div>
+
+      <div class="sidebar-foot">
+        <div class="safe-card"><div class="safe-icon">✓</div><div><strong>Risk checks on</strong><small>Per-order &amp; daily caps</small></div></div>
+        <div class="sidebar-footnote">ZEPAY V3 <span>·</span> BUILD 0.1.0</div>
+      </div>
+    </aside>
+
+    <main class="main-content" id="overview">
+      <header class="topbar">
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><strong>Trading desk</strong></div>
+        <div class="topbar-actions">
+          <div id="modePill" class="mode-pill paper"><span class="mode-dot"></span><span id="modeText">PAPER MODE</span></div>
+          <button class="icon-button" id="refreshButton" title="Refresh market data" aria-label="Refresh market data">↻</button>
+          <div class="avatar">Z</div>
+        </div>
+      </header>
+
+      <section class="page-heading">
+        <div>
+          <div class="eyebrow"><span class="eyebrow-line"></span> ZEBPAY SPOT <span class="eyebrow-separator">/</span> INDIA</div>
+          <h1>Trading desk<span class="heading-period">.</span></h1>
+          <p class="page-subtitle">Market view, research signals and guarded order execution.</p>
+        </div>
+        <div class="heading-aside"><span class="live-indicator"></span><span id="feedStatus">CONNECTING TO MARKET</span><small id="updatedAt">Updating…</small></div>
+      </section>
+
+      <div id="paperNotice" class="paper-notice">
+        <span class="notice-symbol">i</span>
+        <span><strong>Paper trading is active.</strong> Orders are simulated locally. If ZebPay is unreachable, market charts use clearly labelled sample data.</span>
+        <button id="noticeDismiss" class="notice-close" aria-label="Dismiss notice">×</button>
+      </div>
+
+      <section id="liveAuthPanel" class="live-auth-panel hidden" aria-label="Live operator sign in">
+        <div class="live-lock-icon">⌑</div>
+        <div class="live-copy"><strong>Live mode is server-armed</strong><span>Authenticate to view private balances and submit real ZebPay limit orders.</span></div>
+        <form id="loginForm" class="login-form">
+          <label class="sr-only" for="operatorPassword">Operator password</label>
+          <input id="operatorPassword" type="password" autocomplete="current-password" placeholder="Operator password">
+          <button class="button button-amber" type="submit">Unlock desk <span>→</span></button>
+        </form>
+        <button id="logoutButton" class="button button-outline hidden" type="button">Lock desk</button>
+        <div id="loginError" class="login-error"></div>
+      </section>
+
+      <section class="stat-grid" aria-label="Account overview">
+        <article class="stat-card stat-primary">
+          <div class="stat-top"><span>ESTIMATED EQUITY</span><span class="stat-icon">◉</span></div>
+          <div id="equityValue" class="stat-value">₹—</div>
+          <div id="equitySub" class="stat-foot"><span class="stat-context">INR portfolio value</span><span class="stat-tag">MARKED TO MARKET</span></div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>24H REALIZED P&amp;L</span><span class="stat-icon">⌁</span></div>
+          <div id="pnlValue" class="stat-value neutral">—</div>
+          <div class="stat-foot"><span class="stat-context">Tracked executions only</span><span class="stat-tag quiet">NO ESTIMATE</span></div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>FREE INR</span><span class="stat-icon">₹</span></div>
+          <div id="freeInrValue" class="stat-value">₹—</div>
+          <div class="stat-foot"><span class="stat-context">Available to trade</span><span class="stat-tag">SPOT WALLET</span></div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>OPEN ORDERS</span><span class="stat-icon">⇄</span></div>
+          <div id="openOrdersValue" class="stat-value">—</div>
+          <div class="stat-foot"><span class="stat-context">Across this desk</span><span id="dailyUsageTag" class="stat-tag quiet">DAILY CAP —</span></div>
+        </article>
+      </section>
+
+      <section class="market-strip" aria-label="Watchlist">
+        <div class="watch-heading"><span class="watch-pulse"></span><span>WATCHLIST</span></div>
+        <button class="watch-item active" data-symbol="BTC/INR">
+          <span class="coin-mark bitcoin">₿</span><span class="watch-pair"><strong>BTC <small>/ INR</small></strong><small>Bitcoin</small></span><span class="watch-quote"><strong id="watchBtcPrice">₹—</strong><small id="watchBtcChange" class="flat">—</small></span><span id="watchBtcSpark" class="mini-spark"></span>
+        </button>
+        <button class="watch-item" data-symbol="ETH/INR">
+          <span class="coin-mark ethereum">◆</span><span class="watch-pair"><strong>ETH <small>/ INR</small></strong><small>Ethereum</small></span><span class="watch-quote"><strong id="watchEthPrice">₹—</strong><small id="watchEthChange" class="flat">—</small></span><span id="watchEthSpark" class="mini-spark purple"></span>
+        </button>
+        <div class="watch-note"><span class="provider-dot"></span><span id="providerLabel">SOURCE —</span></div>
+      </section>
+
+      <section class="market-layout" id="market">
+        <article class="panel chart-panel">
+          <div class="panel-header chart-header">
+            <div class="asset-heading">
+              <div class="coin-mark bitcoin large" id="selectedCoinMark">₿</div>
+              <div><div class="pair-title-row"><h2 id="selectedPair">BTC/INR</h2><span class="market-chip">SPOT</span></div><div id="assetName" class="asset-name">Bitcoin · ZebPay</div></div>
+            </div>
+            <div class="chart-price-box"><strong id="chartLastPrice">₹—</strong><span id="chartChange" class="flat">—</span></div>
+          </div>
+          <div class="chart-controls">
+            <div class="timeframe-tabs" role="group" aria-label="Chart timeframe">
+              <button data-timeframe="1m">1m</button><button class="active" data-timeframe="5m">5m</button><button data-timeframe="15m">15m</button><button data-timeframe="1h">1h</button><button data-timeframe="4h">4h</button><button data-timeframe="1d">1d</button>
+            </div>
+            <div class="chart-control-right"><span class="candle-legend"><i></i> OHLC</span><button id="chartExpand" class="chart-tool" title="Toggle chart height">⤢</button></div>
+          </div>
+          <div class="chart-wrap"><canvas id="priceChart" aria-label="Price candles chart"></canvas><div id="chartTooltip" class="chart-tooltip hidden"></div><div id="chartEmpty" class="chart-empty hidden">Waiting for market candles…</div></div>
+          <div class="chart-footer"><div><span class="chart-provider-dot"></span><span id="chartSource">OFFLINE PREVIEW FEED</span></div><span>PRICE IN INR <b>·</b> CANDLES ARE NOT A TRADE SIGNAL</span></div>
+        </article>
+
+        <article class="panel order-panel">
+          <div class="order-panel-head"><div><span class="panel-kicker">ORDER TICKET</span><h2>Place an order</h2></div><span class="limit-badge">LIMIT ONLY</span></div>
+          <div class="side-tabs" role="group" aria-label="Order side"><button id="buyTab" class="side-tab buy active" type="button">Buy <span>↗</span></button><button id="sellTab" class="side-tab sell" type="button">Sell <span>↘</span></button></div>
+          <div class="order-symbol-row"><label for="symbolSelect">MARKET</label><select id="symbolSelect"><option value="BTC/INR">BTC / INR</option><option value="ETH/INR">ETH / INR</option></select><span class="dropdown-caret">⌄</span></div>
+          <form id="orderForm">
+            <div class="field-row"><div class="field-label"><label for="priceInput">LIMIT PRICE</label><span>INR</span></div><div class="input-shell"><input id="priceInput" inputmode="decimal" autocomplete="off" placeholder="0.00" required><button type="button" id="priceFromMarket" class="field-action">MID</button></div></div>
+            <div class="field-row"><div class="field-label"><label for="amountInput">AMOUNT</label><span id="baseUnit">BTC</span></div><div class="input-shell"><input id="amountInput" inputmode="decimal" autocomplete="off" placeholder="0.00000000" required><button type="button" id="amountMax" class="field-action">MAX</button></div></div>
+            <div class="quick-amounts"><button type="button" data-percent="25">25%</button><button type="button" data-percent="50">50%</button><button type="button" data-percent="75">75%</button><button type="button" data-percent="100">100%</button></div>
+            <div class="order-summary"><span>Estimated total</span><strong id="orderTotal">₹0.00 <small>INR</small></strong></div>
+            <div id="liveConfirmRow" class="live-confirm-row hidden"><label><input id="liveConfirmCheck" type="checkbox"><span>I confirm this will submit a <b>real ZebPay order</b>.</span></label></div>
+            <button id="submitOrder" class="button submit-button buy-submit" type="submit"><span id="submitLabel">Place buy limit order</span><span class="button-arrow">→</span></button>
+          </form>
+          <div class="order-foot"><span class="shield-icon">◇</span><span>Risk check before every order</span><button id="riskDetails" type="button">DETAILS</button></div>
+          <div id="orderMessage" class="order-message hidden" role="status"></div>
+        </article>
+      </section>
+
+      <section class="research-grid" id="signals">
+        <article class="panel signal-panel">
+          <div class="section-title"><div><span class="panel-kicker">RULE-BASED RESEARCH</span><h2>Momentum snapshot</h2></div><span class="indicator-tag">SMA 10 / 30</span></div>
+          <div class="signal-content"><div id="signalGauge" class="signal-gauge neutral"><span id="signalArrow">→</span></div><div class="signal-copy"><div id="signalBias" class="signal-bias">Loading signal…</div><p id="signalDescription">A simple moving-average comparison on the selected candle history.</p></div><div class="signal-metrics"><div><span>FAST SMA</span><strong id="fastSma">—</strong></div><div><span>SLOW SMA</span><strong id="slowSma">—</strong></div><div><span>SPREAD</span><strong id="smaSpread">—</strong></div></div></div>
+          <div class="research-disclaimer">Research indicator only · no automated execution</div>
+        </article>
+        <article class="panel kronos-panel">
+          <div class="section-title"><div class="kronos-heading"><span class="kronos-orb">K</span><div><span class="panel-kicker">FOUNDATION MODEL</span><h2>Kronos forecast</h2></div></div><span id="kronosStatus" class="model-status">OPTIONAL</span></div>
+          <div class="kronos-body"><p id="kronosDescription">Connect the upstream Kronos model locally to generate a candle forecast. It never sends orders.</p><div id="forecastResult" class="forecast-result hidden"><div><span>FORECAST CLOSE</span><strong id="forecastPrice">—</strong></div><div><span>MODEL CHANGE</span><strong id="forecastChange">—</strong></div><span id="forecastDirection" class="forecast-direction">—</span></div><button id="runForecast" class="button button-outline" type="button">Run forecast <span>↗</span></button></div>
+          <div class="research-disclaimer">Predictions are uncertain · research only</div>
+        </article>
+      </section>
+
+      <section class="panel orders-panel" id="orders">
+        <div class="section-title orders-title"><div><span class="panel-kicker">EXECUTION LOG</span><h2>Orders</h2></div><div class="order-filter"><span id="orderCountLabel">0 records</span><button id="ordersRefresh" class="subtle-button" type="button">↻ Refresh</button></div></div>
+        <div class="table-scroll"><table><thead><tr><th>MARKET</th><th>DATE / TIME</th><th>SIDE</th><th>TYPE</th><th>PRICE</th><th>AMOUNT</th><th>TOTAL</th><th>STATUS</th><th></th></tr></thead><tbody id="ordersTable"><tr><td colspan="9" class="empty-row"><span class="empty-icon">⌁</span><strong>No orders yet</strong><small>Paper or live orders from this desk appear here.</small></td></tr></tbody></table></div>
+        <div class="orders-foot"><span><span class="table-status-dot"></span> Order history is stored locally</span><span id="dailyCapText">Daily turnover cap · —</span></div>
+      </section>
+
+      <footer class="app-footer"><span>© 2026 Zepay Trading Desk</span><span>SPOT ONLY <i>·</i> NO WITHDRAWALS <i>·</i> NO LEVERAGE</span><a href="/api/health" target="_blank" rel="noreferrer">SYSTEM STATUS ↗</a></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>
