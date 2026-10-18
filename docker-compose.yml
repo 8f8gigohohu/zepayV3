@@ -1,0 +1,58 @@
+services:
+  terminal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zebpay-kronos-terminal:local
+    container_name: zebpay-kronos-terminal
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
+      AUTO_LIVE_TRADING_ENABLED: ${AUTO_LIVE_TRADING_ENABLED:-false}
+      ZEBPAY_API_KEY: ${ZEBPAY_API_KEY:-}
+      ZEBPAY_SECRET_KEY: ${ZEBPAY_SECRET_KEY:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      SECURE_COOKIE: ${SECURE_COOKIE:-false}
+      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      ALLOWED_SYMBOLS: ${ALLOWED_SYMBOLS:-BTC/INR,ETH/INR}
+      MAX_ORDER_NOTIONAL: ${MAX_ORDER_NOTIONAL:-25000}
+      MAX_DAILY_NOTIONAL: ${MAX_DAILY_NOTIONAL:-100000}
+      MAX_OPEN_ORDERS: ${MAX_OPEN_ORDERS:-8}
+      MIN_ORDER_NOTIONAL: ${MIN_ORDER_NOTIONAL:-100}
+      MAX_PRICE_DEVIATION_PCT: ${MAX_PRICE_DEVIATION_PCT:-0.01}
+      MAX_POSITION_BASE: ${MAX_POSITION_BASE:-0.001}
+      MAX_DAILY_LOSS_QUOTE: ${MAX_DAILY_LOSS_QUOTE:-5000}
+      MAX_DAILY_TRADES: ${MAX_DAILY_TRADES:-50}
+      COOLDOWN_AFTER_LOSS_SEC: ${COOLDOWN_AFTER_LOSS_SEC:-300}
+      CIRCUIT_BREAKER_PCT: ${CIRCUIT_BREAKER_PCT:-0.05}
+      PAPER_STARTING_INR: ${PAPER_STARTING_INR:-500000}
+      DATABASE_PATH: /app/data/zepay.sqlite3
+      RUNTIME_CONFIG_PATH: /app/data/runtime.yaml
+      KRONOS_PATH: /app/models/Kronos
+      HF_HOME: /app/data/huggingface
+    volumes:
+      - terminal_data:/app/data
+      - ./models/Kronos:/app/models/Kronos:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  terminal_data:

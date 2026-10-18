@@ -1,0 +1,53 @@
+exchange:
+  name: zebpay
+  spot_base_url: https://sapi.zebpay.com
+  api_version: v2
+  rate_limit_ms: 250
+  max_retries: 4
+trading:
+  symbol: BTC/INR
+  timeframe: 1m
+  candle_lookback: 200
+  predict_horizon: 24
+  signal_threshold_buy: 0.002
+  signal_threshold_sell: -0.002
+  min_confidence: 0.5
+  order_type: LIMIT
+  limit_offset_pct: 0.0005
+  order_size_base: 0.0001
+  loop_interval_sec: 60
+  max_open_orders: 3
+  enabled: false
+kronos:
+  enabled: false
+  tokenizer_model: NeoQuasar/Kronos-Tokenizer-base
+  predictor_model: NeoQuasar/Kronos-base
+  device: cpu
+  max_context: 512
+  use_fallback: true
+  fallback_window: 20
+  cache_seconds: 30
+risk:
+  max_position_base: 0.001
+  max_daily_loss_quote: 5000.0
+  max_daily_trades: 50
+  cooldown_after_loss_sec: 300
+  circuit_breaker_pct: 0.05
+  max_order_notional_quote: 25000.0
+  max_daily_notional_quote: 100000.0
+paper_trading:
+  enabled: true
+  starting_balance_quote: 500000.0
+  simulate_slippage_pct: 0.001
+logging:
+  level: INFO
+  file: logs/trading.log
+  max_bytes: 10000000
+  backup_count: 5
+database:
+  url: sqlite:///data/zepay.sqlite3
+ui:
+  host: 0.0.0.0
+  port: 5173
+  refresh_interval_ms: 1000
+  theme: dark

@@ -1,0 +1,8 @@
+# Optional CPU/GPU requirements for the Kronos inference adapter.
+# Install these only if you are enabling the optional Kronos model integration.
+torch>=2.0.0
+pandas==2.2.2
+einops==0.8.1
+huggingface_hub==0.33.1
+safetensors==0.6.2
+tqdm==4.67.1

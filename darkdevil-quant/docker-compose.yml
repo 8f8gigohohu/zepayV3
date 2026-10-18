@@ -1,0 +1,55 @@
+# DarkDevil Quant - full stack (production-style). Database/Redis are NOT
+# published to host ports; only frontend (3000) is exposed.
+# Usage: docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: djq
+      POSTGRES_PASSWORD: ${DJQ_DB_PASSWORD:?set DJQ_DB_PASSWORD in .env}
+      POSTGRES_DB: darkdevil
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U djq -d darkdevil"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1"]
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      DJQ_ENVIRONMENT: production
+      DJQ_SECRET_KEY: ${DJQ_SECRET_KEY:?set DJQ_SECRET_KEY in .env}
+      DJQ_DATABASE_URL: postgresql+asyncpg://djq:${DJQ_DB_PASSWORD}@db:5432/darkdevil
+      DJQ_LIVE_TRADING_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/system/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    environment:
+      DJQ_API_UPSTREAM: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db-data:
