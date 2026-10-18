@@ -5,15 +5,24 @@ import secrets
 import threading
 import time
 from collections import defaultdict, deque
+from typing import Any
+
+import jwt
 
 
 class SessionManager:
-    """In-memory operator sessions; secrets are never stored in browser storage."""
+    """Rate-limited single-admin JWT sessions delivered only in HttpOnly cookies."""
 
-    def __init__(self, lifetime_seconds: int = 8 * 60 * 60, attempts_per_window: int = 5):
+    def __init__(
+        self,
+        secret: str | None = None,
+        lifetime_seconds: int = 8 * 60 * 60,
+        attempts_per_window: int = 5,
+    ):
+        self.secret = secret or secrets.token_urlsafe(48)
         self.lifetime_seconds = lifetime_seconds
         self.attempts_per_window = attempts_per_window
-        self._sessions: dict[str, float] = {}
+        self._revoked: dict[str, float] = {}
         self._attempts: dict[str, deque[float]] = defaultdict(deque)
         self._lock = threading.Lock()
 
@@ -30,28 +39,38 @@ class SessionManager:
             with self._lock:
                 self._attempts[remote_key].append(now)
             return None
-        token = secrets.token_urlsafe(32)
+        token = jwt.encode(
+            {"sub": "operator", "iat": int(now), "exp": int(now + self.lifetime_seconds), "jti": secrets.token_urlsafe(24)},
+            self.secret,
+            algorithm="HS256",
+        )
         with self._lock:
             self._attempts[remote_key].clear()
-            # Discard expired entries during login rather than allowing an unbounded session map.
-            self._sessions = {key: expiry for key, expiry in self._sessions.items() if expiry > now}
-            self._sessions[token] = now + self.lifetime_seconds
+            self._revoked = {jti: expiry for jti, expiry in self._revoked.items() if expiry > now}
         return token
 
     def is_valid(self, token: str | None) -> bool:
         if not token:
             return False
-        now = time.time()
+        try:
+            claims: dict[str, Any] = jwt.decode(token, self.secret, algorithms=["HS256"])
+        except jwt.InvalidTokenError:
+            return False
+        jti = str(claims.get("jti", ""))
+        if claims.get("sub") != "operator" or not jti:
+            return False
         with self._lock:
-            expiry = self._sessions.get(token)
-            if expiry is None:
-                return False
-            if expiry <= now:
-                del self._sessions[token]
-                return False
-            return True
+            return jti not in self._revoked
 
     def revoke(self, token: str | None) -> None:
-        if token:
+        if not token:
+            return
+        try:
+            claims = jwt.decode(token, self.secret, algorithms=["HS256"], options={"verify_exp": False})
+        except jwt.InvalidTokenError:
+            return
+        jti = str(claims.get("jti", ""))
+        expiry = float(claims.get("exp", 0))
+        if jti:
             with self._lock:
-                self._sessions.pop(token, None)
+                self._revoked[jti] = expiry

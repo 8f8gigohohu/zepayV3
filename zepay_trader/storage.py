@@ -11,7 +11,7 @@ from typing import Any, Iterator
 from .utils import decimal_text, split_symbol
 
 
-OPEN_STATUSES = ("open", "submitting", "unknown")
+OPEN_STATUSES = ("open", "partially_filled", "submitting", "unknown")
 
 
 def utc_now() -> str:
@@ -96,7 +96,7 @@ class Store:
         with self._db() as db:
             rows = db.execute(
                 "SELECT symbol, side, amount, price FROM orders "
-                "WHERE mode = 'paper' AND status IN ('open', 'submitting', 'unknown')"
+                "WHERE mode = 'paper' AND status IN ('open', 'partially_filled', 'submitting', 'unknown')"
             ).fetchall()
         for row in rows:
             base, quote = split_symbol(row["symbol"])

@@ -2,13 +2,11 @@ from decimal import Decimal
 
 import pytest
 
-from zepay_trader.demo_market import candles as demo_candles
-from zepay_trader.exchange import SubmissionUncertain
 from zepay_trader.kronos import KronosAdapter
 from zepay_trader.risk import RiskViolation
 from zepay_trader.schemas import LimitOrderRequest
 from zepay_trader.storage import Store
-from zepay_trader.trading import LIVE_CONFIRMATION_PHRASE, LiveTradingDisabled, TradingService
+from zepay_trader.trading import LiveTradingDisabled, TradingService
 
 
 class FakeGateway:
@@ -19,12 +17,18 @@ class FakeGateway:
             "source": "test", "is_simulated": False, "timestamp": 1_700_000_000_000,
         }
         self.submitted = []
+        self.cancelled = []
 
     def ticker(self, symbol):
         return {**self.quote, "symbol": symbol}
 
     def candles(self, symbol, timeframe, limit):
-        return demo_candles(symbol, timeframe, limit)
+        step_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}[timeframe]
+        now_ms = 1_700_000_000_000
+        return [
+            [now_ms - (limit - index) * step_ms, 100, 101, 99, 100 + index / 100, 2]
+            for index in range(limit)
+        ]
 
     def market(self, symbol):
         return {"symbol": symbol, "active": True, "minimum_amount": 0.000001, "minimum_notional": 100}
@@ -39,11 +43,21 @@ class FakeGateway:
             "USDT": {"free": Decimal("0"), "total": Decimal("0")},
         }
 
+    def test_connection(self, symbol="BTC/INR"):
+        return {
+            "ok": True,
+            "tested_at": 1_700_000_000_000,
+            "market_data": {"ok": True, "symbol": symbol, "source": "test"},
+            "private_account": {"ok": True, "assets_returned": 3},
+            "orders_submitted": 0,
+        }
+
     def place_limit_order(self, symbol, side, amount, price, client_order_id):
         self.submitted.append((symbol, side, amount, price, client_order_id))
         return {"id": "ZEB-123", "status": "open", "filled": 0, "info": {"orderId": "ZEB-123"}}
 
     def cancel_order(self, exchange_order_id, symbol):
+        self.cancelled.append((exchange_order_id, symbol))
         return {"id": exchange_order_id, "status": "canceled"}
 
     def fetch_order(self, exchange_order_id, symbol):
@@ -125,7 +139,7 @@ def test_live_mode_stays_locked_without_all_server_gates(settings_factory):
         service.place_order(request, operator_authenticated=True)
 
 
-def test_live_mode_requires_secure_cookie_in_addition_to_credentials(settings_factory):
+def test_live_readiness_stays_false_even_with_secure_configuration(settings_factory):
     settings = settings_factory(
         trading_mode="live",
         live_trading_enabled=True,
@@ -137,101 +151,53 @@ def test_live_mode_requires_secure_cookie_in_addition_to_credentials(settings_fa
     assert settings.live_ready is False
 
 
-def test_live_order_fails_closed_without_best_side_quote(settings_factory):
+def test_live_order_is_refused_before_any_exchange_call(settings_factory):
     settings = settings_factory(
         trading_mode="live",
         live_trading_enabled=True,
         api_key="test-key",
         api_secret="test-secret",
         app_password="test-operator-password",
-        secure_cookie=True,
-    )
-    quote = {
-        "symbol": "BTC/INR", "last": 100.0, "bid": 99.9, "ask": None,
-        "source": "test", "is_simulated": False,
-    }
-    service, _store = make_service(settings, FakeGateway(quote))
-    request = LimitOrderRequest(
-        symbol="BTC/INR", side="buy", amount=Decimal("1"), price=Decimal("101"),
-        live_confirmation=LIVE_CONFIRMATION_PHRASE,
-    )
-    with pytest.raises(RiskViolation, match="valid best buy quote"):
-        service.place_order(request, operator_authenticated=True)
-
-
-def test_live_order_precision_is_rejected_instead_of_silently_changed(settings_factory):
-    settings = settings_factory(
-        trading_mode="live",
-        live_trading_enabled=True,
-        api_key="test-key",
-        api_secret="test-secret",
-        app_password="test-operator-password",
+        jwt_secret="test-jwt-secret-that-is-long-enough-to-pass",
         secure_cookie=True,
     )
     gateway = FakeGateway()
-    gateway.normalize_order = lambda _symbol, amount, _price: (amount, Decimal("100"))
     service, _store = make_service(settings, gateway)
-    request = LimitOrderRequest(
-        symbol="BTC/INR", side="buy", amount=Decimal("1"), price=Decimal("101.23"),
-        live_confirmation=LIVE_CONFIRMATION_PHRASE,
-    )
-    with pytest.raises(RiskViolation, match="does not match ZebPay precision"):
-        service.place_order(request, operator_authenticated=True)
-    assert gateway.submitted == []
-
-
-def test_ambiguous_live_submission_is_recorded_unknown_without_retry(settings_factory):
-    settings = settings_factory(
-        trading_mode="live",
-        live_trading_enabled=True,
-        api_key="test-key",
-        api_secret="test-secret",
-        app_password="test-operator-password",
-        secure_cookie=True,
-    )
-
-    class TimeoutGateway(FakeGateway):
-        def place_limit_order(self, *args):
-            self.submitted.append(args)
-            raise SubmissionUncertain("request timed out after submit")
-
-    gateway = TimeoutGateway()
-    service, store = make_service(settings, gateway)
-    request = LimitOrderRequest(
-        symbol="BTC/INR", side="buy", amount=Decimal("1"), price=Decimal("101"),
-        live_confirmation=LIVE_CONFIRMATION_PHRASE,
-    )
-    with pytest.raises(SubmissionUncertain):
-        service.place_order(request, operator_authenticated=True)
-    orders = store.list_orders("live")
-    assert len(orders) == 1
-    assert orders[0]["status"] == "unknown"
-    assert store.open_order_count("live") == 1
-    assert len(gateway.submitted) == 1
-
-
-def test_live_submission_requires_exact_confirmation_and_records_order(settings_factory):
-    settings = settings_factory(
-        trading_mode="live",
-        live_trading_enabled=True,
-        api_key="test-key",
-        api_secret="test-secret",
-        app_password="test-operator-password",
-        secure_cookie=True,
-    )
-    gateway = FakeGateway()
-    service, store = make_service(settings, gateway)
     request = LimitOrderRequest(
         symbol="BTC/INR", side="buy", amount=Decimal("1"), price=Decimal("101")
     )
-    with pytest.raises(RiskViolation, match="exact per-order confirmation"):
+    with pytest.raises(LiveTradingDisabled, match="order routing is fail-closed"):
         service.place_order(request, operator_authenticated=True)
     assert gateway.submitted == []
+    assert gateway.cancelled == []
 
-    confirmed = request.model_copy(update={"live_confirmation": LIVE_CONFIRMATION_PHRASE})
-    order = service.place_order(confirmed, operator_authenticated=True)
-    assert order["mode"] == "live"
-    assert order["exchange_order_id"] == "ZEB-123"
-    assert order["status"] == "open"
-    assert len(gateway.submitted) == 1
-    assert store.open_order_count("live") == 1
+
+def test_live_cancel_is_refused_and_does_not_call_exchange(settings_factory):
+    settings = settings_factory(
+        trading_mode="live",
+        live_trading_enabled=True,
+        api_key="test-key",
+        api_secret="test-secret",
+        app_password="test-operator-password",
+        jwt_secret="test-jwt-secret-that-is-long-enough-to-pass",
+        secure_cookie=True,
+    )
+    gateway = FakeGateway()
+    service, store = make_service(settings, gateway)
+    store.create_order({
+        "client_order_id": "legacy-live-order",
+        "mode": "live",
+        "symbol": "BTC/INR",
+        "side": "buy",
+        "order_type": "limit",
+        "amount": Decimal("0.001"),
+        "price": Decimal("100"),
+        "filled": Decimal("0"),
+        "status": "open",
+        "exchange_order_id": "ZEB-LEGACY-1",
+        "raw": {},
+    })
+    with pytest.raises(LiveTradingDisabled, match="cancellation is fail-closed"):
+        service.cancel_order("legacy-live-order", "BTC/INR")
+    assert gateway.cancelled == []
+    assert store.get_order("legacy-live-order")["status"] == "open"

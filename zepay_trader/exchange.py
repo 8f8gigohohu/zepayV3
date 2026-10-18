@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -10,16 +11,15 @@ from .config import Settings
 from .utils import decimal_text, normalize_symbol
 
 
+logger = logging.getLogger("zepay.exchange")
+
+
 class ExchangeGatewayError(RuntimeError):
     pass
 
 
 class ExchangeUnavailable(ExchangeGatewayError):
     pass
-
-
-class SubmissionUncertain(ExchangeGatewayError):
-    """The order request may have reached ZebPay; it must not be retried blindly."""
 
 
 class ExchangeGateway:
@@ -30,11 +30,25 @@ class ExchangeGateway:
     public market-data call can never accidentally use private API credentials.
     """
 
-    def __init__(self, settings: Settings, client_factory: Any | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        client_factory: Any | None = None,
+        rate_limit_ms: int = 1000,
+        max_retries: int = 3,
+        circuit_threshold: int = 5,
+        circuit_reset_seconds: float = 30.0,
+    ):
         self.settings = settings
+        self.rate_limit_ms = max(50, int(rate_limit_ms))
+        self.max_retries = max(0, min(int(max_retries), 4))
+        self.circuit_threshold = max(1, int(circuit_threshold))
+        self.circuit_reset_seconds = max(1.0, float(circuit_reset_seconds))
         self._client_factory = client_factory
         self._clients: dict[str, Any] = {}
         self._markets_loaded: set[str] = set()
+        self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
         self._lock = threading.RLock()
 
     def _build_client(self, private: bool) -> Any:
@@ -48,7 +62,8 @@ class ExchangeGateway:
             raise ExchangeUnavailable("Installed CCXT version does not include the ZebPay adapter")
         config: dict[str, Any] = {
             "enableRateLimit": True,
-            "timeout": 12_000,
+            "rateLimit": self.rate_limit_ms,
+            "timeout": 15_000,
             "options": {
                 "defaultType": "spot",
                 "fetchMarkets": {"types": ["spot"]},
@@ -68,7 +83,7 @@ class ExchangeGateway:
         client = self._clients[key]
         if key not in self._markets_loaded:
             try:
-                client.load_markets()
+                self._request("/api/v2/ex/exchangeInfo", client, client.load_markets)
             except Exception as exc:  # CCXT has several transport and exchange error classes.
                 raise self._read_error(exc) from exc
             self._markets_loaded.add(key)
@@ -81,12 +96,73 @@ class ExchangeGateway:
                 text = text.replace(secret, "[redacted]")
         return ExchangeUnavailable(text[:400])
 
+    def _request(self, endpoint: str, client: Any, operation: Any, *, retryable: bool = True) -> Any:
+        now = time.monotonic()
+        if now < self._circuit_open_until:
+            remaining = max(1, int(self._circuit_open_until - now))
+            raise ExchangeUnavailable(f"ZebPay circuit breaker is open; retry after {remaining} seconds")
+
+        attempts = self.max_retries + 1 if retryable else 1
+        for attempt in range(attempts):
+            started = time.perf_counter()
+            try:
+                result = operation()
+                status = getattr(client, "last_http_response_code", None) or 200
+                logger.info(
+                    "exchange_request endpoint=%s response_code=%s latency_ms=%.1f attempt=%s",
+                    endpoint,
+                    status,
+                    (time.perf_counter() - started) * 1000,
+                    attempt + 1,
+                )
+                self._consecutive_failures = 0
+                self._circuit_open_until = 0.0
+                return result
+            except Exception as exc:
+                status = getattr(client, "last_http_response_code", None) or getattr(getattr(exc, "response", None), "status_code", None) or "error"
+                transient = self._is_transient_error(exc)
+                logger.warning(
+                    "exchange_request endpoint=%s response_code=%s latency_ms=%.1f attempt=%s error_type=%s",
+                    endpoint,
+                    status,
+                    (time.perf_counter() - started) * 1000,
+                    attempt + 1,
+                    exc.__class__.__name__,
+                )
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self.circuit_threshold:
+                    self._circuit_open_until = time.monotonic() + self.circuit_reset_seconds
+                    logger.error(
+                        "exchange_circuit_open failures=%s reset_seconds=%.1f",
+                        self._consecutive_failures,
+                        self.circuit_reset_seconds,
+                    )
+                if not retryable or not transient or attempt + 1 >= attempts:
+                    raise
+                time.sleep(min(4.0, 0.25 * (2 ** attempt)))
+        raise ExchangeUnavailable("Exchange request attempts exhausted")
+
+    @staticmethod
+    def _is_transient_error(exc: Exception) -> bool:
+        try:
+            import ccxt
+            transient_types = tuple(
+                candidate for name in (
+                    "NetworkError", "RequestTimeout", "ExchangeNotAvailable",
+                    "RateLimitExceeded", "DDoSProtection",
+                )
+                if isinstance((candidate := getattr(ccxt, name, None)), type)
+            )
+            return bool(transient_types) and isinstance(exc, transient_types)
+        except ImportError:
+            return isinstance(exc, (TimeoutError, ConnectionError))
+
     def ticker(self, symbol: str) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
         with self._lock:
             client = self._client()
             try:
-                ticker = client.fetch_ticker(symbol)
+                ticker = self._request("/api/v2/market/ticker", client, lambda: client.fetch_ticker(symbol))
             except Exception as exc:
                 raise self._read_error(exc) from exc
         info = ticker.get("info") if isinstance(ticker.get("info"), dict) else {}
@@ -115,16 +191,46 @@ class ExchangeGateway:
         with self._lock:
             client = self._client()
             try:
-                raw = client.fetch_ohlcv(
-                    symbol,
-                    timeframe=timeframe,
-                    since=since,
-                    limit=limit,
-                    params={"until": now_ms},
+                raw = self._request(
+                    "/api/v2/market/klines",
+                    client,
+                    lambda: client.fetch_ohlcv(
+                        symbol,
+                        timeframe=timeframe,
+                        since=since,
+                        limit=limit,
+                        params={"until": now_ms},
+                    ),
                 )
             except Exception as exc:
                 raise self._read_error(exc) from exc
         return [[float(value or 0) for value in candle[:6]] for candle in raw]
+
+    def order_book(self, symbol: str, limit: int = 100) -> dict[str, Any]:
+        normalized = normalize_symbol(symbol)
+        with self._lock:
+            client = self._client()
+            try:
+                return self._request(
+                    "/api/v2/market/orderbook",
+                    client,
+                    lambda: client.fetch_order_book(normalized, limit=limit),
+                )
+            except Exception as exc:
+                raise self._read_error(exc) from exc
+
+    def recent_trades(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+        normalized = normalize_symbol(symbol)
+        with self._lock:
+            client = self._client()
+            try:
+                return self._request(
+                    "/api/v2/market/trades",
+                    client,
+                    lambda: client.fetch_trades(normalized, limit=limit),
+                )
+            except Exception as exc:
+                raise self._read_error(exc) from exc
 
     def market(self, symbol: str) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
@@ -171,7 +277,7 @@ class ExchangeGateway:
         with self._lock:
             client = self._client(private=True)
             try:
-                raw = client.fetch_balance()
+                raw = self._request("/api/v2/account/balance", client, client.fetch_balance)
             except Exception as exc:
                 raise self._read_error(exc) from exc
         result: dict[str, dict[str, Decimal]] = {}
@@ -184,43 +290,65 @@ class ExchangeGateway:
             }
         return result
 
-    def place_limit_order(self, symbol: str, side: str, amount: Decimal, price: Decimal, client_order_id: str) -> dict[str, Any]:
+    def test_connection(self, symbol: str = "BTC/INR") -> dict[str, Any]:
+        """Verify public market access and signed private reads; never submits an order."""
+        normalized = normalize_symbol(symbol)
+        tested_at = int(time.time() * 1000)
+        try:
+            self.ticker(normalized)
+            market_data: dict[str, Any] = {"ok": True, "symbol": normalized, "source": "zebpay"}
+        except Exception as exc:
+            safe_error = self._read_error(exc)
+            market_data = {"ok": False, "symbol": normalized, "error": str(safe_error)[:180]}
+
+        try:
+            balances = self.balance()
+            private_account: dict[str, Any] = {"ok": True, "assets_returned": len(balances)}
+        except Exception as exc:
+            safe_error = self._read_error(exc)
+            private_account = {"ok": False, "error": str(safe_error)[:180]}
+
+        return {
+            "ok": bool(market_data["ok"] and private_account["ok"]),
+            "tested_at": tested_at,
+            "market_data": market_data,
+            "private_account": private_account,
+            "orders_submitted": 0,
+        }
+
+    def update_settings(self, settings: Settings) -> None:
+        """Apply credential rotation and discard cached clients holding old keys."""
         with self._lock:
-            client = self._client(private=True)
-            try:
-                order = client.create_order(
-                    symbol,
-                    "limit",
-                    side,
-                    float(amount),
-                    float(price),
-                    {"clientOrderId": client_order_id},
-                )
-            except Exception as exc:
-                try:
-                    import ccxt
-                    uncertain_types = (ccxt.NetworkError, ccxt.RequestTimeout, ccxt.ExchangeNotAvailable)
-                except ImportError:
-                    uncertain_types = ()
-                text = self._read_error(exc)
-                if uncertain_types and isinstance(exc, uncertain_types):
-                    raise SubmissionUncertain(str(text)) from exc
-                raise text from exc
-        return order
+            self.settings = settings
+            self._clients.clear()
+            self._markets_loaded.clear()
+            self._consecutive_failures = 0
+            self._circuit_open_until = 0.0
+
+    def place_limit_order(self, symbol: str, side: str, amount: Decimal, price: Decimal, client_order_id: str) -> dict[str, Any]:
+        """ZebPay live writes are intentionally disabled pending an authoritative contract."""
+        raise ExchangeUnavailable(
+            "ZebPay live order placement is disabled: official docs and clients conflict on order "
+            "fields (amount/quantity, quoteOrderAmount/quoteOrderQty, stopLossPrice/stopPrice). "
+            "No request is sent."
+        )
 
     def cancel_order(self, exchange_order_id: str, symbol: str) -> dict[str, Any]:
-        with self._lock:
-            client = self._client(private=True)
-            try:
-                return client.cancel_order(str(exchange_order_id), normalize_symbol(symbol))
-            except Exception as exc:
-                raise self._read_error(exc) from exc
+        """Refuse exchange cancellation until the official endpoint path is confirmed."""
+        raise ExchangeUnavailable(
+            "ZebPay live cancellation is disabled: official sources conflict on the cancel path. "
+            "No request is sent; manage any existing exchange order in ZebPay directly."
+        )
 
     def fetch_order(self, exchange_order_id: str, symbol: str) -> dict[str, Any]:
         with self._lock:
             client = self._client(private=True)
             try:
-                return client.fetch_order(str(exchange_order_id), normalize_symbol(symbol))
+                return self._request(
+                    "/api/v2/ex/order",
+                    client,
+                    lambda: client.fetch_order(str(exchange_order_id), normalize_symbol(symbol)),
+                )
             except Exception as exc:
                 raise self._read_error(exc) from exc
 
@@ -228,7 +356,11 @@ class ExchangeGateway:
         with self._lock:
             client = self._client(private=True)
             try:
-                return client.fetch_open_orders(normalize_symbol(symbol))
+                return self._request(
+                    "/api/v2/ex/orders",
+                    client,
+                    lambda: client.fetch_open_orders(normalize_symbol(symbol)),
+                )
             except Exception as exc:
                 raise self._read_error(exc) from exc
 

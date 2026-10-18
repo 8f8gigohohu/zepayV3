@@ -1,123 +1,169 @@
-# Zepay V3 Trading Desk
+# ZebPay–Kronos Trading Terminal
 
-A small, self-hosted **ZebPay Spot** trading desk with a web UI, a locally simulated paper account, configurable live-trading gates, and optional Kronos/Hummingbot integrations. The repository started as an empty shell; this project adds the application and integrations rather than copying either large upstream repository wholesale.
+A paper-first, self-hosted terminal for **ZebPay INR spot markets**. The project combines a React 18/Vite dashboard with a FastAPI API, exchange-backed market data, a persistent paper-order ledger and execution journal, read-only live account access, server-side risk controls, and optional Kronos forecasts.
 
-> **Trading risk:** crypto orders can lose money. AI/model forecasts and technical indicators are uncertain and are not investment advice. Live trading is deliberately locked by default. Do not enable it until you have reviewed the code, API permissions, and guardrails.
+> **Risk notice:** Digital-asset trading can lose money. Forecasts are uncertain research outputs, not investment advice. Paper mode is the default. Live ZebPay order placement, cancellation, and autonomous live strategy execution are intentionally disabled: official ZebPay references and clients conflict on write contracts, and this app does not send live write requests.
 
-## What is implemented
+## Safety and scope
 
-- Responsive browser dashboard for market quotes, candle chart, INR portfolio, order ticket, research signals, and order history.
-- ZebPay Spot access through the supported `ccxt.zebpay` adapter (pinned to a release that includes ZebPay). It uses ZebPay's public and authenticated REST endpoints, exchange market precision, and CCXT signing.
-- Paper execution with a persistent SQLite ledger, reserved funds for open limit orders, simulated fills only when a limit crosses the current bid/ask, and a visible offline sample feed when public ZebPay data cannot be reached. Paper fills do not model fees, depth, or slippage.
-- Live **spot limit** orders, cancellations, balance checks, exchange precision, current-price band protection, a server-side market allowlist, and per-order/daily/open-order limits. A network timeout after submission is recorded as `unknown`; the app will not blindly retry it.
-- Optional SMA 10/30 research indicator. Signals never submit orders.
-- Optional adapter to the upstream [Kronos financial-candle model](https://github.com/shiyu-coder/Kronos). Model loading is lazy; Kronos is not required to run the desk and cannot place orders.
-- A standalone Hummingbot ZebPay Spot connector extension under `integrations/hummingbot/connector/exchange/zebpay/`. Copy it into a Hummingbot source checkout to use Hummingbot's strategy engine with ZebPay.
+- **No sample market feed.** Prices, depth, public trades, and candles come from ZebPay through the pinned CCXT ZebPay adapter. If ZebPay data is unavailable, the API reports an error and the UI shows an empty/unavailable state; it does not substitute generated or sample prices.
+- **Paper mode** starts with local simulated INR cash (default ₹500,000). Paper orders are recorded locally and can fill against the current ZebPay best bid/ask. Paper fills are simulations, not exchange executions; the paper wallet is not a ZebPay balance.
+- **Live account access is read-only.** Operator authentication protects credentials and private-account reads. Live order placement, cancellation, and live strategy starts are rejected by the server regardless of environment flags or connection-test results. The browser never receives exchange secrets.
+- The terminal supports local paper limit-order simulation only. It does not support live market/limit orders, margin/leverage, Futures, deposits, withdrawals, wallet sends, or address creation.
+- The dashboard emergency stop halts strategy execution but does not close positions or send live cancellation requests. Manage any real exchange orders directly in ZebPay.
+- The Hummingbot connector directory is a separate legacy integration, not governed by this dashboard's fail-closed checks. Do not use it with live credentials; independently review and verify that integration before any deployment.
 
-**Not included:** market orders, futures, margin/leverage, deposits/withdrawals, or autonomous live model trading. Live exchange requests cannot be tested in this workspace without the operator's ZebPay credentials and access to ZebPay's API hosts.
+## Features
+
+- React 18, Vite, Tailwind CSS, Zustand, and TradingView Lightweight Charts candlesticks; responsive dark trading-terminal layout.
+- FastAPI REST endpoints and an authenticated WebSocket event stream for market, order, risk, strategy, and forecast updates.
+- CCXT ZebPay Spot adapter for public market data and read-only private account access, with safe-read retries and circuit-breaker protection. The app has no live exchange write route.
+- Persistent SQLite order/paper-balance storage and SQLAlchemy fill journal with mode-separated positions, average cost, realized P&amp;L, fees, and risk events.
+- Layered server-side controls: INR-pair allowlist, per-order and daily notional caps, order-count cap, balance checks, price deviation, tracked-position limits, daily loss/trade caps, loss cooldown, and drawdown circuit breaker.
+- Optional Kronos predictor with lazy model loading and cache. A deterministic EMA-plus-momentum fallback is available when configured. Forecasts never submit orders by themselves.
+- In-app **Connections & Security** setup for ZebPay Spot credentials, operator-password rotation, read-only market/account connectivity checks, and hard-risk visibility. No live-order arm is available.
+- Hummingbot ZebPay Spot connector extension under `integrations/hummingbot/connector/exchange/zebpay/`.
+
+## ZebPay Spot API integration
+
+The dashboard connects to `https://sapi.zebpay.com` through the pinned CCXT ZebPay Spot adapter (`ccxt==4.5.88`) for public market data and read-only private account/order reads. Authentication uses `X-AUTH-APIKEY` and `X-AUTH-SIGNATURE`; credentials remain server-side and are never returned to the browser. The adapter's order-create/cancel capabilities are not exposed by the app.
+
+The official ZebPay references and client implementations conflict on live order payloads and cancellation routes. Until ZebPay clarifies those contracts and they are independently verified, this app deliberately refuses live placement and cancellation without making a request. Successful connectivity checks or market reads do not change that policy. Local tests exercise read-only adapter signing; they do not verify live connectivity, credentials, or order execution.
+
+The browser's `/api/ws` connection is the terminal's own event channel, not a direct subscription to a ZebPay WebSocket. The dashboard uses REST for ZebPay market/account reads. Do not configure the terminal as a WebConsole OAuth redirect client; those callback fields are not consumed here.
+
+Reference: [ZebPay API docs](https://apidocs.zebpay.com/) and the [official Spot API reference repository](https://github.com/zebpay/zebpay-api-references/tree/main/spot/api-reference).
 
 ## Run locally
 
-Python 3.10+ is required (tested with Python 3.11).
+Requirements: Python 3.11 recommended (Python 3.10+ may work), Node.js 20+, and npm.
+
+### Backend
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate              # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
-cp .env.example .env                   # optional; paper mode is the default
+cp .env.example .env                   # optional; defaults to paper mode
 ./run.sh
 ```
 
-Open `http://127.0.0.1:8000` on a local machine. `run.sh` binds to `0.0.0.0` so it can be used by a container/preview; for a personal workstation, prefer:
+### Frontend development server
+
+In a second terminal:
 
 ```bash
-python -m uvicorn zepay_trader.main:app --host 127.0.0.1 --port 8000
+cd frontend
+npm ci
+npm run dev
 ```
 
-The paper account starts with the configured simulated INR balance (default ₹500,000) and persists orders/balances in `data/zepay.sqlite3`. If the ZebPay public API is reachable, paper mode uses ZebPay's market data but still simulates every fill locally. If it is not reachable, the desk uses deterministic sample candles and quotes and labels them **SIMULATED**. Sample prices are not exchange prices.
+Open `http://localhost:5173`. Vite proxies relative `/api` and WebSocket requests to the FastAPI server at `http://127.0.0.1:8000` (override the server-side proxy target with `VITE_API_TARGET`). Browser code uses same-origin `/api` paths.
 
-Optional API endpoints are listed at `/api/docs`. Health/config responses never include API secrets.
+To build the static React bundle for FastAPI, run:
 
-## Enabling real ZebPay Spot trading
+```bash
+cd frontend
+npm run build
+```
 
-Live trading requires **all** of these server-side settings. They are intentionally not editable from the browser:
+The build is emitted to `web/`, which the FastAPI app serves. The build output is checked in so the backend can serve the dashboard without a separate frontend process.
+
+### Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Open `http://localhost:8000`. Compose persists the SQLite database and mutable runtime configuration in a named volume; the initial runtime configuration is seeded from `config.yaml`. To use Kronos in the container, place the upstream source at `models/Kronos/`, install the optional inference dependencies into a custom image, and configure model access. The default image deliberately omits large Torch/GPU packages.
+
+## Configuration
+
+- `.env` provides server-side account, auth, hard risk caps, CORS origins, database path, and model source settings. Never commit `.env` or put credentials in browser storage.
+- The dashboard's **Settings** section can initialize operator access and save/rotate ZebPay Spot keys. Secret values are never read back into the page. Dashboard-managed secrets are stored in `data/private_settings.json` (owner-only permissions, mode `0600`) and take precedence over `.env` values; set `PRIVATE_SETTINGS_PATH` to change the file path. This file is not encrypted at rest, so protect the server filesystem/backups or use a secret manager for production.
+- On first setup, the server creates a one-time code at `data/initial-setup.token` with mode `0600`. Open the file locally and enter its contents in Settings along with the ZebPay key/secret and a new operator password. The code is consumed after setup and is never returned by an API; existing keys are never prefilled into the browser.
+- `config.yaml` is the initial application/runtime configuration (exchange rate/retry options, strategy defaults, forecast settings, risk settings, paper-account behavior, database description, and UI refresh preferences).
+- Runtime strategy settings persist as YAML. In Docker, the mutable copy is `/app/data/runtime.yaml`; locally it defaults to `config.yaml`. The `PUT /api/strategy/config` endpoint cannot loosen the hard limits supplied through server environment settings.
+- Strategy auto-start is disabled on process startup, even if a previous runtime file recorded it as enabled.
+
+Useful environment values are documented in `.env.example`. Defaults include:
+
+```dotenv
+TRADING_MODE=paper
+LIVE_TRADING_ENABLED=false
+AUTO_LIVE_TRADING_ENABLED=false
+ALLOWED_SYMBOLS=BTC/INR,ETH/INR
+MAX_ORDER_NOTIONAL=25000
+MAX_DAILY_NOTIONAL=100000
+MAX_OPEN_ORDERS=8
+MAX_POSITION_BASE=0.001
+MAX_DAILY_LOSS_QUOTE=5000
+MAX_DAILY_TRADES=50
+COOLDOWN_AFTER_LOSS_SEC=300
+CIRCUIT_BREAKER_PCT=0.05
+```
+
+## Read-only live-account access and write policy
+
+`TRADING_MODE=live` selects the authenticated, read-only account view; it does **not** authorize trading. Live order placement and cancellation return a fail-closed error before any exchange request, and live strategy starts are rejected. The emergency stop halts the local strategy but never calls ZebPay to cancel orders or close positions. `LIVE_TRADING_ENABLED` and `AUTO_LIVE_TRADING_ENABLED` are reported as configured intent only and cannot override this policy.
+
+To enable read-only private account access, configure ZebPay credentials in **Connections & Security** and complete operator setup over HTTPS. Use the least-privileged key that can read the account data you need; do not grant order-create, wallet-send, address-creation, withdrawal, or Futures permissions. The exchange may change its permission labels, so verify the current options with ZebPay. Credentials are stored server-side; do not commit or paste them into chat. For production, set secure cookies and use a secret manager or protected server storage.
 
 ```dotenv
 TRADING_MODE=live
-LIVE_TRADING_ENABLED=true
-ZEBPAY_API_KEY=your_spot_api_key
-ZEBPAY_SECRET_KEY=your_spot_api_secret
-APP_PASSWORD=use-a-long-random-operator-password
+LIVE_TRADING_ENABLED=false
+AUTO_LIVE_TRADING_ENABLED=false
+ZEBPAY_API_KEY=read_only_spot_key
+ZEBPAY_SECRET_KEY=read_only_spot_secret
+APP_PASSWORD=at-least-12-random-characters
+JWT_SECRET=at-least-32-random-secret-characters
 SECURE_COOKIE=true
 ```
 
-1. Create a ZebPay API key with only the read and spot-trading permissions the bot needs. **Do not grant withdrawal permissions.** Use IP allowlisting when available and keep the secret on the server only.
-2. Put the key/secret in a protected environment or secret manager. Do not commit `.env`, paste credentials into chat, or put them in browser storage.
-3. Keep `ALLOWED_SYMBOLS` narrow (default `BTC/INR,ETH/INR`) and start with conservative `MAX_ORDER_NOTIONAL`, `MAX_DAILY_NOTIONAL`, and `MAX_OPEN_ORDERS` values. The trading desk, portfolio valuation, and turnover controls currently support INR-quoted spot markets only; configure additional INR pairs only.
-4. Set a strong `APP_PASSWORD` of at least 12 characters, put the desk behind HTTPS, set `SECURE_COOKIE=true`, and do not expose the service directly to an untrusted network. The app currently uses one operator password and in-memory sessions; restart logs out operators. Run a single app worker: the session map and order-admission lock are process-local, and multi-worker deployment is not supported.
-5. Restart the app, sign into the operator panel, verify the market and free balance, and test with a very small limit order. The UI asks for a separate confirmation for each live order; the API also requires the exact confirmation phrase.
+These settings expose balances and order history after operator authentication; they do not enable exchange order writes. Manage real orders directly in ZebPay.
 
-Guardrails applied before a live order:
+## Kronos forecasting (optional)
 
-- The server must be explicitly in `live` mode and armed, credentials and a strong password must exist, secure cookies must be enabled, and the operator must be authenticated.
-- Spot limit orders only; symbol must be in the server-side allowlist.
-- ZebPay market amount/price precision and minimums are checked; a value that would need rounding is rejected rather than silently changed. Free balances are checked before sending.
-- A buy/sell limit may not sit more than `MAX_PRICE_DEVIATION_PCT` from the current ask/bid (default `0.01`, i.e. 1%). The live price must come from ZebPay; there is no simulated-price fallback in live mode.
-- Per-order notional, daily submitted notional, and open-order count are capped. Canceled submissions still count toward the daily cap so repeated cancel/recreate cycles do not bypass it.
-- An ambiguous timeout is recorded as `unknown`, not retried. Check ZebPay's order history before taking any further action.
-
-These controls reduce accidental orders but cannot guarantee profit or eliminate exchange, network, market, or software risk. The app does not calculate realized P&amp;L, account-specific taxes/fees, or portfolio-wide INR conversions for unconfigured pairs.
-
-## Kronos integration (optional)
-
-The adapter targets the upstream [`shiyu-coder/Kronos`](https://github.com/shiyu-coder/Kronos) API and its published model zoo. It is disabled by default and performs no execution.
+The adapter targets [shiyu-coder/Kronos](https://github.com/shiyu-coder/Kronos), loads lazily, and is disabled by default. Install the source and optional dependencies:
 
 ```bash
 git clone https://github.com/shiyu-coder/Kronos.git models/Kronos
 pip install -r requirements-kronos.txt
 ```
 
-Then set:
+Configure `KRONOS_PATH`, model/tokenizer names and `KRONOS_DEVICE` in `.env`, then enable the runtime Kronos setting in the strategy panel or YAML. Hugging Face weights may be large and require their own cache/disk budget. When enabled, Kronos inference can fall back to the deterministic statistical predictor if `use_fallback` is enabled. No model inference or forecast accuracy claim has been verified here.
 
-```dotenv
-KRONOS_ENABLED=true
-KRONOS_PATH=models/Kronos
-KRONOS_MODEL=NeoQuasar/Kronos-small
-KRONOS_TOKENIZER=NeoQuasar/Kronos-Tokenizer-base
-KRONOS_DEVICE=cpu
-```
+## Hummingbot connector (optional)
 
-The Hugging Face model weights are fetched/cached by Kronos on the first forecast request. This can require substantial disk, memory, and network access; a GPU is optional. The dashboard's **Run forecast** action only returns a research forecast. It is not wired to order submission or to a live strategy.
-
-## Hummingbot integration (optional)
-
-The connector package is kept separate so this repository does not vendor Hummingbot's full codebase. It follows Hummingbot's `ExchangePyBase` connector contract and is discovered via `zebpay_utils.py`.
-
-Copy the connector into a Hummingbot source checkout, then rebuild/restart that Hummingbot version using its documented development workflow:
+This repository includes an independent Hummingbot ZebPay Spot connector at `integrations/hummingbot/connector/exchange/zebpay/`; it does not vendor Hummingbot itself. Copy it into the matching Hummingbot source tree and use that release's documented development workflow:
 
 ```bash
 cp -R integrations/hummingbot/connector/exchange/zebpay \
   /path/to/hummingbot/hummingbot/connector/exchange/
 ```
 
-After the connector is discovered, connect `zebpay` through Hummingbot and use dash-form pairs such as `BTC-INR`. The extension provides API-key signing, public order-book polling, balance polling, limit-order placement/cancellation, and order/fill status polling. ZebPay Spot's published reference does not specify a private websocket stream, so the connector polls REST; it does not pretend to provide websocket updates. Market orders, derivatives, withdrawals, and leverage are intentionally unsupported. Fee defaults follow an exchange-info example (0.45%); set a Hummingbot fee override if your actual ZebPay account tier differs.
+The connector implementation is version-sensitive and outside the dashboard's fail-closed policy. Build and test it against the exact Hummingbot version you deploy, and use paper trade only. Do not provide it a live key: its API key, session, order sizing, and risk controls are separate from this dashboard and have not been independently reviewed or verified for live use.
 
-This extension is version-sensitive to Hummingbot's Python connector API. Compile and test it in the exact Hummingbot version you deploy, start in Hummingbot paper trade, and only then use a narrowly permissioned API key. Hummingbot connects directly to ZebPay, so this dashboard's operator login, symbol allowlist, price-band check, and notional caps do **not** apply to Hummingbot strategies; configure and test Hummingbot's own strategy sizing/risk limits. The core dashboard does not need Hummingbot installed.
+## REST and WebSocket API
 
-## API overview
+Interactive OpenAPI docs: `GET /api/docs`.
 
-- `GET /api/health`, `GET /api/config` — non-secret service and guardrail status.
-- `GET /api/market`, `GET /api/candles` — ZebPay market data; paper mode may return labelled simulated data on outage.
-- `GET /api/portfolio`, `GET /api/orders` — simulated account data in paper mode; authenticated ZebPay balances and this desk's tracked orders/statuses in live mode.
-- `POST /api/orders`, `DELETE /api/orders/{client_order_id}` — limit order actions, with server-side risk checks.
-- `GET /api/strategy/signals`, `GET /api/forecast` — research-only signals.
-- `POST /api/auth/login`, `POST /api/auth/logout` — single-operator live session.
+- Public: `GET /api/health`, `/api/status`, `/api/config`, `/api/markets`, `/api/market`, `/api/market/orderbook`, `/api/market/trades`, `/api/candles`, `/api/strategy/signals`, `/api/strategy/forecast` (also `/api/forecast`).
+- Authenticated live account reads: `GET /api/portfolio`, `/api/positions`, `/api/orders`, `/api/journal/trades`, and `/api/risk`. `POST /api/orders` and `DELETE /api/orders/{client_order_id}` are paper-only; in live mode, create/cancel requests are rejected before contacting ZebPay.
+- Strategy/risk controls: `GET|PUT /api/strategy/config`, `GET /api/strategy/status`, `POST /api/strategy/start`, `/api/strategy/stop`, `/api/strategy/emergency-stop`, `/api/risk/resume`.
+- Operator setup/session: `POST /api/auth/bootstrap` (one-time local setup code), `POST /api/auth/login`, `GET /api/auth/session`, `POST /api/auth/logout`.
+- Settings (operator session required): `POST /api/settings/credentials`, `/api/settings/password`, `/api/settings/test-connection`, `/api/settings/live-arm`. The legacy live-arm route permits disarming but refuses arming.
+- WebSocket: `/api/ws`. Live-mode sockets require the operator HttpOnly session cookie.
 
-## Tests
+The service remains paper-first and fails closed when exchange market data is unavailable. Paper balances and fills are simulated locally; live account data is read-only, and the service does not submit or cancel live orders.
+
+## Tests and checks
 
 ```bash
 pip install -r requirements-dev.txt
 pytest -q
+cd frontend && npm ci && npm run build
 ```
 
-The suite covers paper fills/reservations, order/risk caps, live-mode gates, API routes, and a local CCXT signing smoke test. It does not send requests to ZebPay or place live orders.
+Tests use local fakes and SQLite; they do not call ZebPay, verify live credentials, load Kronos weights, or place orders. Hummingbot extension compatibility should be tested separately against the exact Hummingbot release.
